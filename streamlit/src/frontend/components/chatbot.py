@@ -109,6 +109,10 @@ def render_chatbot_page() -> None:
 
         _append_message("assistant", assistant_reply)
 
+    # Divider before MCP LLM Playground
+    st.divider()
+    render_mcp_llm_playground_section()
+
 
 def _stream_chunks(stream: Iterable) -> Iterable[str]:
     """Yield token deltas from the streaming Azure OpenAI response."""
@@ -121,4 +125,186 @@ def _stream_chunks(stream: Iterable) -> Iterable[str]:
 
 def _append_message(role: str, content: str) -> None:
     st.session_state.messages.append({"role": role, "content": content})
+
+
+# === MCP LLM Playground (moved from Tools page) ===
+import json
+from typing import Any, Dict
+from web3 import Web3
+
+# Prefer config, but fall back to string literals if import fails
+try:
+    from .config import (
+        ARC_RPC_ENV,
+        CONTRACT_ADDRESS_ENV,
+        CONTRACT_ABI_PATH_ENV,
+        PRIVATE_KEY_ENV,
+        USDC_DECIMALS_ENV,
+        GAS_LIMIT_ENV,
+        GAS_PRICE_GWEI_ENV,
+    )
+except Exception:  # pragma: no cover - fallback values allow the UI to load
+    ARC_RPC_ENV = "ARC_TESTNET_RPC_URL"
+    CONTRACT_ADDRESS_ENV = "CREDIT_LINE_MANAGER_ADDRESS"
+    CONTRACT_ABI_PATH_ENV = "ARC_CREDIT_LINE_MANAGER_ABI_PATH"
+    PRIVATE_KEY_ENV = "PRIVATE_KEY"
+    USDC_DECIMALS_ENV = "ARC_USDC_DECIMALS"
+    GAS_LIMIT_ENV = "ARC_GAS_LIMIT"
+    GAS_PRICE_GWEI_ENV = "ARC_GAS_PRICE_GWEI"
+
+from .web3_utils import get_web3_client, load_contract_abi
+from .toolkit import (
+    build_llm_toolkit,
+    render_llm_history,
+    render_tool_message,
+    tool_error,
+    tool_success,
+)
+
+_MCP_SYSTEM_PROMPT = (
+    "You are PawChain's MCP automation copilot. Use the provided tools to inspect wallet balances, credit availability, and "
+    "credit score data on Arc. Prefer calling tools before responding, summarize results in business-friendly language, and "
+    "suggest next steps for the borrower when appropriate."
+)
+
+
+def _run_mcp_llm_conversation(
+    client: Any,
+    deployment: str,
+    messages: list[Dict[str, Any]],
+    tools_schema: list[Dict[str, Any]],
+    function_map: Dict[str, Any],
+) -> None:
+    pending = client.chat.completions.create(
+        model=deployment,
+        messages=messages,
+        tools=tools_schema,
+        tool_choice="auto",
+    )
+
+    while True:
+        message = pending.choices[0].message
+        tool_calls = getattr(message, "tool_calls", None) or []
+
+        if tool_calls:
+            messages.append(message.model_dump())
+            for tool_call in tool_calls:
+                tool_name = tool_call.function.name
+                args_payload = tool_call.function.arguments or "{}"
+                try:
+                    arguments = json.loads(args_payload) if args_payload else {}
+                except json.JSONDecodeError:
+                    arguments = {}
+
+                handler = function_map.get(tool_name)
+                if handler is None:
+                    tool_output = tool_error(f"Tool '{tool_name}' is not registered.")
+                else:
+                    try:
+                        response_payload = handler(**arguments)
+                        tool_output = response_payload if isinstance(response_payload, str) else tool_success(response_payload)
+                    except Exception as exc:  # pragma: no cover - surfaced via UI only
+                        tool_output = tool_error(str(exc))
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": tool_output,
+                    }
+                )
+                render_tool_message(tool_name, tool_output)
+
+            pending = client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                tools=tools_schema,
+                tool_choice="auto",
+            )
+            continue
+
+        content = getattr(message, "content", None)
+        if content:
+            messages.append({"role": "assistant", "content": content})
+            with st.chat_message("assistant"):
+                st.markdown(content)
+        break
+
+
+def render_mcp_llm_playground_section() -> None:
+    st.subheader("🤖 MCP LLM Playground")
+
+    # Pre-flight Azure
+    client = _create_azure_client()
+    if client is None:
+        st.info(
+            "Configure Azure OpenAI credentials in `.env` (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`, "
+            "`AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_CHAT_DEPLOYMENT`) to use the MCP assistant."
+        )
+        return
+
+    deployment = os.getenv(AZURE_DEPLOYMENT_ENV)
+    if not deployment:
+        st.warning("Set `AZURE_OPENAI_CHAT_DEPLOYMENT` in `.env` to enable Azure OpenAI chat completions.")
+        return
+
+    # Build Web3 + contract
+    rpc_url = os.getenv(ARC_RPC_ENV)
+    contract_address = os.getenv(CONTRACT_ADDRESS_ENV)
+    abi_path = os.getenv(CONTRACT_ABI_PATH_ENV)
+    private_key = os.getenv(PRIVATE_KEY_ENV)
+    token_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
+    gas_price_gwei = os.getenv(GAS_PRICE_GWEI_ENV, "1")
+
+    w3 = get_web3_client(rpc_url)
+    abi = load_contract_abi(abi_path)
+
+    if w3 is None:
+        st.info("Connect to the RPC and provide contract details to unlock the MCP playground.")
+        return
+    if not abi or not contract_address:
+        st.info("Provide a valid ABI and contract address in `.env` to unlock the MCP playground.")
+        return
+
+    try:
+        contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
+    except Exception as exc:
+        st.error(f"Unable to build contract instance: {exc}")
+        return
+
+    tools_schema, function_map = build_llm_toolkit(
+        w3=w3,
+        contract=contract,
+        token_decimals=token_decimals,
+        private_key=private_key,
+        default_gas_limit=default_gas_limit,
+        gas_price_gwei=gas_price_gwei,
+    )
+
+    if not tools_schema:
+        st.warning("No MCP tools are available for the current contract configuration.")
+        return
+
+    messages = st.session_state.setdefault(
+        "mcp_llm_messages",
+        [{"role": "system", "content": _MCP_SYSTEM_PROMPT}],
+    )
+
+    render_llm_history(messages)
+
+    prompt = st.chat_input(
+        "Ask the MCP assistant to inspect wallets, credit limits, or contract data…",
+        key="mcp_llm_prompt",
+    )
+    if not prompt:
+        return
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    messages.append({"role": "user", "content": prompt})
+
+    with st.spinner("Azure OpenAI is orchestrating MCP tools…"):
+        _run_mcp_llm_conversation(client, deployment, messages, tools_schema, function_map)
 
