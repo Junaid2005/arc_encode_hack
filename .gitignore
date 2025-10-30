@@ -20,3 +20,4 @@ arc_test/.DS_Store
 blockchain_code/lib
 blockchain_code/streamlit/.DS_Store
 .DS_Store
+streamlit/src/frontend/components/__pycache__
