@@ -188,10 +188,10 @@ def render_chatbot_page() -> None:
 
     # Build Web3 + contract for MCP tools (single chat experience, tool-enabled)
     rpc_url = os.getenv(ARC_RPC_ENV)
-    contract_address = os.getenv("CREDIT_SCORE_REGISTRY_ADDRESS")
-    abi_path = os.getenv("ARC_CREDIT_LINE_MANAGER_ABI_PATH")
+    contract_address = os.getenv(SBT_ADDRESS_ENV)
+    abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
     private_key = os.getenv(PRIVATE_KEY_ENV)
-    token_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    token_decimals = 0
     default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
     gas_price_gwei = os.getenv(GAS_PRICE_GWEI_ENV, "1")
 
@@ -199,11 +199,11 @@ def render_chatbot_page() -> None:
     abi = load_contract_abi(abi_path)
 
     if w3 is None:
-        st.info("Connect to the RPC and provide contract details to unlock MCP tools in chat.")
+        st.info("Connect to the RPC and provide TrustMintSBT details to unlock MCP tools in chat.")
         return
     if not abi or not contract_address:
         st.info(
-            "Set `CREDIT_SCORE_REGISTRY_ADDRESS` and `ARC_CREDIT_LINE_MANAGER_ABI_PATH` in `.env` to unlock MCP tools."
+            "Set `SBT_ADDRESS` and `TRUSTMINT_SBT_ABI_PATH` in `.env` to unlock MCP tools."
         )
         return
 
@@ -227,7 +227,7 @@ def render_chatbot_page() -> None:
         return
 
     # Tool-enabled chat loop (single chat)
-    with st.spinner("Azure OpenAI is orchestrating MCP tools…"):
+    with st.spinner("GPT 5 is orchestrating MCP tools…"):
         _run_mcp_llm_conversation(
             client, deployment, st.session_state.messages, tools_schema, function_map
         )
@@ -258,16 +258,18 @@ try:
     from .config import (
         ARC_RPC_ENV,
         PRIVATE_KEY_ENV,
-        USDC_DECIMALS_ENV,
         GAS_LIMIT_ENV,
         GAS_PRICE_GWEI_ENV,
+        SBT_ADDRESS_ENV,
+        TRUSTMINT_SBT_ABI_PATH_ENV,
     )
 except Exception:  # pragma: no cover - fallback values allow the UI to load
     ARC_RPC_ENV = "ARC_TESTNET_RPC_URL"
     PRIVATE_KEY_ENV = "PRIVATE_KEY"
-    USDC_DECIMALS_ENV = "ARC_USDC_DECIMALS"
     GAS_LIMIT_ENV = "ARC_GAS_LIMIT"
     GAS_PRICE_GWEI_ENV = "ARC_GAS_PRICE_GWEI"
+    SBT_ADDRESS_ENV = "SBT_ADDRESS"
+    TRUSTMINT_SBT_ABI_PATH_ENV = "TRUSTMINT_SBT_ABI_PATH"
 
 from .web3_utils import get_web3_client, load_contract_abi
 from .toolkit import (
@@ -279,9 +281,8 @@ from .toolkit import (
 )
 
 _MCP_SYSTEM_PROMPT = (
-    "You are PawChain's MCP automation copilot. Use the provided tools to inspect wallet balances, credit availability, and "
-    "credit score data on Arc. Prefer calling tools before responding, summarize results in business-friendly language, and "
-    "suggest next steps for the borrower when appropriate."
+    "You are PawChain's MCP automation copilot. Use the provided tools to check TrustMint SBT status and read/update "
+    "credit scores on Arc. Prefer calling tools before responding, summarize results for the user, and suggest next steps."
 )
 
 
@@ -368,10 +369,10 @@ def render_mcp_llm_playground_section() -> None:
 
     # Build Web3 + contract
     rpc_url = os.getenv(ARC_RPC_ENV)
-    contract_address = os.getenv("CREDIT_SCORE_REGISTRY_ADDRESS")
-    abi_path = os.getenv("ARC_CREDIT_LINE_MANAGER_ABI_PATH")
+    contract_address = os.getenv(SBT_ADDRESS_ENV)
+    abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
     private_key = os.getenv(PRIVATE_KEY_ENV)
-    token_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    token_decimals = 0
     default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
     gas_price_gwei = os.getenv(GAS_PRICE_GWEI_ENV, "1")
 
@@ -379,10 +380,10 @@ def render_mcp_llm_playground_section() -> None:
     abi = load_contract_abi(abi_path)
 
     if w3 is None:
-        st.info("Connect to the RPC and provide contract details to unlock the MCP playground.")
+        st.info("Connect to the RPC and provide TrustMintSBT details to unlock the MCP playground.")
         return
     if not abi or not contract_address:
-        st.info("Set `CREDIT_SCORE_REGISTRY_ADDRESS` and `ARC_CREDIT_LINE_MANAGER_ABI_PATH` in `.env` to unlock the MCP playground.")
+        st.info("Set `SBT_ADDRESS` and `TRUSTMINT_SBT_ABI_PATH` in `.env` to unlock the MCP playground.")
         return
 
     try:
