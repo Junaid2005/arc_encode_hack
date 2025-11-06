@@ -6,12 +6,20 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from web3 import Web3
 from web3.contract import Contract
-from web3.exceptions import ContractLogicError
+from web3.exceptions import ContractLogicError, BadFunctionCallOutput
 
 from .messages import tool_success, tool_error
 from .tx_helpers import fee_params, next_nonce, sign_and_send, metamask_tx_request
 
 from ..config import PRIVATE_KEY_ENV
+
+
+_LOAN_STATE_LABELS: Dict[int, str] = {
+    0: "None",
+    1: "Active",
+    2: "Repaid",
+    3: "Defaulted",
+}
 
 
 def build_lending_pool_toolkit(
@@ -81,15 +89,36 @@ def build_lending_pool_toolkit(
         scale = Decimal(10) ** int(native_decimals if use_native else token_decimals)
         return (Decimal(amount) / scale) if amount else Decimal(0)
 
-    def _loan_status(address: str) -> Optional[tuple[bool, int, int, int, int, bool]]:
+    def _normalize_reason(reason: str) -> str:
+        return str(reason or "").replace("_", " ").lower()
+
+    def _loan_status(address: str) -> Optional[tuple[int, int, int, int, int, bool]]:
         try:
             status_fn = getattr(pool_contract.functions, "loanStatus", None)
             if status_fn is not None:
-                return status_fn(address).call()
+                raw = status_fn(address).call()
+                if isinstance(raw, tuple) and len(raw) == 6:
+                    return (
+                        int(raw[0]),
+                        int(raw[1]),
+                        int(raw[2]),
+                        int(raw[3]),
+                        int(raw[4]),
+                        bool(raw[5]),
+                    )
             loan = getattr(pool_contract.functions, "getLoan")(address).call()
-            principal, outstanding, start_time, due_time, active = loan
-            banned_flag = bool(getattr(pool_contract.functions, "isBanned")(address).call())
-            return bool(active), int(principal), int(outstanding), int(start_time), int(due_time), banned_flag
+            if isinstance(loan, tuple) and len(loan) == 5:
+                principal, outstanding, start_time, due_time, state_or_flag = loan
+                state_code = int(state_or_flag)
+                banned_flag = bool(getattr(pool_contract.functions, "isBanned")(address).call())
+                return (
+                    state_code,
+                    int(principal),
+                    int(outstanding),
+                    int(start_time),
+                    int(due_time),
+                    banned_flag,
+                )
         except Exception:
             return None
 
@@ -106,24 +135,33 @@ def build_lending_pool_toolkit(
         except Exception:
             return None
 
+    def _manual_can_open_loan(address: str, principal_units: int) -> tuple[bool, str]:
+        loan = _loan_status(address)
+        if loan is None:
+            return False, "Unable to read loan status"
+        state_code, _, outstanding, _, _, banned_flag = loan
+        if banned_flag:
+            return False, "Borrower is banned"
+        if state_code == 1 and outstanding != 0:
+            human = _from_token_units(outstanding, use_native=True)
+            return False, f"Borrower has an active loan outstanding ({human} units)"
+        try:
+            available = int(getattr(pool_contract.functions, "availableLiquidity")().call())
+        except Exception:
+            return False, "Unable to read pool liquidity"
+        if available < principal_units:
+            return False, "Insufficient pool liquidity"
+        return True, "OK"
+
     def _can_open_loan(address: str, principal_units: int) -> tuple[bool, str]:
         try:
             checker = getattr(pool_contract.functions, "canOpenLoan", None)
             if checker is None:
-                loan = _loan_status(address)
-                if loan is None:
-                    return False, "Unable to read loan status"
-                active, _, outstanding, _, _, banned_flag = loan
-                if banned_flag:
-                    return False, "Borrower is banned"
-                if active and outstanding != 0:
-                    human = _from_token_units(outstanding, use_native=True)
-                    return False, f"Borrower has an active loan outstanding ({human} units)"
-                available = int(getattr(pool_contract.functions, "availableLiquidity")().call())
-                if available < principal_units:
-                    return False, "Insufficient pool liquidity"
-                return True, "OK"
-            ok, reason = checker(address, principal_units).call()
+                return _manual_can_open_loan(address, principal_units)
+            try:
+                ok, reason = checker(address, principal_units).call()
+            except (ContractLogicError, BadFunctionCallOutput):
+                return _manual_can_open_loan(address, principal_units)
             if isinstance(reason, (bytes, bytearray)):
                 try:
                     reason = reason.decode("utf-8").rstrip("\x00")
@@ -205,7 +243,7 @@ def build_lending_pool_toolkit(
             status = _loan_status(borrower)
             if status is None:
                 return tool_error("Unable to read loan status for borrower.")
-            active, principal, outstanding, start_time, due_time, banned_flag = status
+            state_code, principal, outstanding, start_time, due_time, banned_flag = status
             return tool_success(
                 {
                     "borrower": borrower,
@@ -214,7 +252,8 @@ def build_lending_pool_toolkit(
                     "outstandingHuman": str(_from_token_units(int(outstanding), use_native=True)),
                     "startTime": int(start_time),
                     "dueTime": int(due_time),
-                    "active": bool(active),
+                    "state": _LOAN_STATE_LABELS.get(state_code, f"Unknown({state_code})"),
+                    "stateCode": int(state_code),
                     "banned": bool(banned_flag),
                 }
             )
@@ -223,7 +262,7 @@ def build_lending_pool_toolkit(
 
     register(
         "getLoan",
-        "Read loan struct for a borrower (principal, outstanding, startTime, dueTime, active).",
+        "Read loan struct for a borrower (principal, outstanding, startTime, dueTime, state).",
         {
             "type": "object",
             "properties": {"borrower_address": {"type": "string", "description": "Borrower wallet address."}},
@@ -420,8 +459,8 @@ def build_lending_pool_toolkit(
 
         ok, reason = _can_open_loan(borrower, principal_units)
         if not ok:
-            lower_reason = reason.lower()
-            if "active loan" in lower_reason:
+            normalized_reason = _normalize_reason(reason)
+            if "active loan" in normalized_reason:
                 status = _loan_status(borrower)
                 if status is not None:
                     _, _, outstanding, _, _, _ = status
@@ -429,7 +468,27 @@ def build_lending_pool_toolkit(
                     return tool_error(
                         f"Cannot open loan: borrower has an active loan outstanding ({human_outstanding} native units)."
                     )
-            return tool_error(f"Cannot open loan: {reason}")
+            if "borrower banned" in normalized_reason:
+                return tool_error("Cannot open loan: borrower is banned.")
+            if "insufficient pool liquidity" in normalized_reason:
+                try:
+                    available = int(getattr(pool_contract.functions, "availableLiquidity")().call())
+                    human_available = _from_token_units(available, use_native=True)
+                    return tool_error(f"Cannot open loan: only {human_available} native units are currently available in the pool.")
+                except Exception:
+                    return tool_error("Cannot open loan: insufficient pool liquidity.")
+            if "score too low" in normalized_reason:
+                return tool_error("Cannot open loan: borrower credit score is below the required minimum.")
+            if "score invalid" in normalized_reason:
+                return tool_error("Cannot open loan: borrower score is invalid.")
+            if "missing sbt" in normalized_reason:
+                return tool_error("Cannot open loan: borrower does not hold the required TrustMint SBT credential.")
+            if "principal zero" in normalized_reason:
+                return tool_error("Cannot open loan: requested principal must be greater than zero.")
+            if "term zero" in normalized_reason:
+                return tool_error("Cannot open loan: loan term must be greater than zero seconds.")
+            human_readable_reason = normalized_reason.strip().capitalize() if normalized_reason else str(reason)
+            return tool_error(f"Cannot open loan: {human_readable_reason}")
 
         signer = _acct_for_key(owner_key)
         if signer and owner_key:
@@ -446,7 +505,17 @@ def build_lending_pool_toolkit(
                     }
                 )
                 sent = sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "openLoan failed"))
+                if "error" in sent:
+                    reason = sent.get("reason")
+                    if reason:
+                        return tool_error(f"{sent['error']}: {reason}")
+                    detail = sent.get("error")
+                    if detail and detail.strip():
+                        return tool_error(detail)
+                    return tool_error(
+                        "Transaction reverted without a reason. Check that the owner wallet matches `Ownable.initialOwner` and that the borrower has no active loan, is not banned, and the pool has sufficient liquidity."
+                    )
+                return tool_success(sent)
             except ContractLogicError as exc:
                 return tool_error(f"Contract rejected: {exc}")
             except Exception as exc:
@@ -502,10 +571,10 @@ def build_lending_pool_toolkit(
         status = _loan_status(borrower)
         if status is None:
             return tool_error("Unable to read borrower loan status; ensure contract is upgraded.")
-        active, _, outstanding, _, _, banned_flag = status
+        state_code, _, outstanding, _, _, banned_flag = status
         if banned_flag:
             return tool_error("Borrower is banned; repay unavailable until unbanned.")
-        if not active or outstanding == 0:
+        if state_code != 1 or outstanding == 0:
             return tool_error("No active loan to repay.")
 
         amt = int(outstanding)
@@ -622,164 +691,6 @@ def build_lending_pool_toolkit(
             "required": ["borrower_address"],
         },
         checkDefaultAndBan_tool,
-    )
-
-    def setDepositLockSeconds_tool(seconds: int) -> str:
-        signer = _acct_for_key(owner_key)
-        if signer and owner_key:
-            try:
-                tx = pool_contract.functions.setDepositLockSeconds(int(seconds)).build_transaction(
-                    {
-                        "from": signer,
-                        "nonce": next_nonce(w3, signer),
-                        "gas": default_gas_limit,
-                        "chainId": w3.eth.chain_id,
-                        **_fees(),
-                    }
-                )
-                sent = sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setDepositLockSeconds failed"))
-            except ContractLogicError as exc:
-                return tool_error(f"Contract rejected: {exc}")
-            except Exception as exc:
-                return tool_error(f"setDepositLockSeconds failed: {exc}")
-
-        if owner_address:
-            try:
-                tx_req = metamask_tx_request(
-                    pool_contract,
-                    "setDepositLockSeconds",
-                    [int(seconds)],
-                    from_address=owner_address,
-                )
-                return _metamask_success(
-                    tx_req,
-                    "Use MetaMask (owner wallet) to update deposit lock duration.",
-                    owner_address,
-                )
-            except Exception as exc:
-                return tool_error(f"Unable to build MetaMask tx: {exc}")
-
-        return tool_error(
-            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
-        )
-
-    register(
-        "setDepositLockSeconds",
-        "Owner-only: set global deposit lock duration in seconds.",
-        {
-            "type": "object",
-            "properties": {"seconds": {"type": "integer", "description": "Lock duration in seconds (0 to disable)."}},
-            "required": ["seconds"],
-        },
-        setDepositLockSeconds_tool,
-    )
-
-    def setTrustMintSbt_tool(sbt_address: str) -> str:
-        try:
-            sbt = Web3.to_checksum_address(sbt_address)
-        except ValueError:
-            return tool_error("Invalid SBT address supplied.")
-
-        signer = _acct_for_key(owner_key)
-        if signer and owner_key:
-            try:
-                tx = pool_contract.functions.setTrustMintSbt(sbt).build_transaction(
-                    {
-                        "from": signer,
-                        "nonce": next_nonce(w3, signer),
-                        "gas": default_gas_limit,
-                        "chainId": w3.eth.chain_id,
-                        **_fees(),
-                    }
-                )
-                sent = sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setTrustMintSbt failed"))
-            except ContractLogicError as exc:
-                return tool_error(f"Contract rejected: {exc}")
-            except Exception as exc:
-                return tool_error(f"setTrustMintSbt failed: {exc}")
-
-        if owner_address:
-            try:
-                tx_req = metamask_tx_request(
-                    pool_contract,
-                    "setTrustMintSbt",
-                    [sbt],
-                    from_address=owner_address,
-                )
-                return _metamask_success(
-                    tx_req,
-                    "Use MetaMask (owner wallet) to set TrustMint SBT address (0x0 to disable).",
-                    owner_address,
-                )
-            except Exception as exc:
-                return tool_error(f"Unable to build MetaMask tx: {exc}")
-
-        return tool_error(
-            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
-        )
-
-    register(
-        "setTrustMintSbt",
-        "Owner-only: set TrustMint SBT address for score gating (0x0 to disable).",
-        {
-            "type": "object",
-            "properties": {"sbt_address": {"type": "string", "description": "SBT contract address or 0x000... to disable."}},
-            "required": ["sbt_address"],
-        },
-        setTrustMintSbt_tool,
-    )
-
-    def setMinScoreToBorrow_tool(new_min_score: int) -> str:
-        signer = _acct_for_key(owner_key)
-        if signer and owner_key:
-            try:
-                tx = pool_contract.functions.setMinScoreToBorrow(int(new_min_score)).build_transaction(
-                    {
-                        "from": signer,
-                        "nonce": next_nonce(w3, signer),
-                        "gas": default_gas_limit,
-                        "chainId": w3.eth.chain_id,
-                        **_fees(),
-                    }
-                )
-                sent = sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setMinScoreToBorrow failed"))
-            except ContractLogicError as exc:
-                return tool_error(f"Contract rejected: {exc}")
-            except Exception as exc:
-                return tool_error(f"setMinScoreToBorrow failed: {exc}")
-
-        if owner_address:
-            try:
-                tx_req = metamask_tx_request(
-                    pool_contract,
-                    "setMinScoreToBorrow",
-                    [int(new_min_score)],
-                    from_address=owner_address,
-                )
-                return _metamask_success(
-                    tx_req,
-                    "Use MetaMask (owner wallet) to set minimum score for borrowing.",
-                    owner_address,
-                )
-            except Exception as exc:
-                return tool_error(f"Unable to build MetaMask tx: {exc}")
-
-        return tool_error(
-            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
-        )
-
-    register(
-        "setMinScoreToBorrow",
-        "Owner-only: set minimum score threshold for borrowing.",
-        {
-            "type": "object",
-            "properties": {"new_min_score": {"type": "integer", "description": "Minimum score required."}},
-            "required": ["new_min_score"],
-        },
-        setMinScoreToBorrow_tool,
     )
 
     def unban_tool(borrower_address: str) -> str:

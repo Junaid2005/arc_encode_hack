@@ -42,9 +42,6 @@ _POOL_TOOL_ROLES = {
     "openLoan": "Owner",
     "repay": "Borrower",
     "checkDefaultAndBan": "Owner",
-    "setDepositLockSeconds": "Owner",
-    "setTrustMintSbt": "Owner",
-    "setMinScoreToBorrow": "Owner",
     "unban": "Owner",
 }
 

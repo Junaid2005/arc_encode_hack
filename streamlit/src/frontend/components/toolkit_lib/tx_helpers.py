@@ -145,6 +145,8 @@ def _extract_revert_reason(w3: Web3, tx: Dict[str, Any], receipt: Any) -> Option
             if isinstance(arg0, dict) and "data" in arg0:
                 data_hex = arg0.get("data")
         message = str(exc)
+        if not message or message in {"execution reverted", "execution reverted: no data", "('execution reverted', 'no data')"}:
+            message = ""  # empty to allow fallback formatting later
         if data_hex is None:
             if "data" in message and "0x" in message:
                 data_hex = "0x" + message.split("0x", 1)[1].split(" ")[0]

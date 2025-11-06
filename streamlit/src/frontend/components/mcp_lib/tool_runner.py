@@ -62,6 +62,9 @@ def render_tool_runner(
         st.markdown("### MetaMask bridge")
         render_wallet_section(existing_state, w3, key_prefix, selected)
         st.info("Complete the wallet action above or clear the MetaMask state before running the tool again.")
+        if st.button("Clear MetaMask state", key=f"{mm_state_key}_clear"):
+            st.session_state.pop(mm_state_key, None)
+            st.experimental_rerun()
         return
 
     schema = next(item for item in tools_schema if item["function"]["name"] == selected)
