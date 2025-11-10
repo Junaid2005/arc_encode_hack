@@ -9,6 +9,8 @@ from web3.exceptions import Web3Exception
 
 import streamlit as st
 
+from ..web3_utils import encode_contract_call
+
 _CUSTOM_ERROR_MAP: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "33b2879b": ("DepositAmountZero", ()),
     "1be8a36f": ("DepositValueMismatch", ("uint256", "uint256")),
@@ -205,10 +207,14 @@ def metamask_tx_request(
     """Build a minimal eth_sendTransaction request for MetaMask: {to, data, value}."""
     data_hex: str
     try:
-        data_hex = contract.encodeABI(fn_name, args=args)
+        data_hex = encode_contract_call(contract, fn_name, args)
     except Exception:
-        fn = getattr(contract.functions, fn_name)(*args)
-        data_hex = fn._encode_transaction_data()  # type: ignore[attr-defined]
+        fn = getattr(contract.functions, fn_name)(*(args or []))
+        encode_input = getattr(fn, "encode_input", None)
+        if callable(encode_input):
+            data_hex = encode_input()
+        else:
+            data_hex = fn._encode_transaction_data()  # type: ignore[attr-defined]
     req: Dict[str, Any] = {"to": contract.address, "data": data_hex}
     if value_wei:
         req["value"] = hex(value_wei)

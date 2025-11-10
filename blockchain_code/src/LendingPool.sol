@@ -4,6 +4,8 @@ pragma solidity ^0.8.30;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Minimal interface for TrustMintSBT used for gating
 interface ITrustMintSBT {
@@ -17,6 +19,8 @@ interface ITrustMintSBT {
  *         Funds are transferred into the pool contract immediately; borrowers repay in native token as well.
  */
 contract LendingPool is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     enum LoanState {
         None,
         Active,
@@ -57,11 +61,16 @@ contract LendingPool is Ownable, ReentrancyGuard {
     string private constant REASON_ALREADY_BANNED = "ALREADY_BANNED";
     string private constant REASON_NOT_BANNED = "NOT_BANNED";
     string private constant REASON_LOAN_DEFAULTED = "LOAN_DEFAULTED";
+    string private constant REASON_USDC_AMOUNT_ZERO = "USDC_AMOUNT_ZERO";
+    string private constant REASON_RECIPIENT_ZERO = "RECIPIENT_ZERO";
+    string private constant REASON_USDC_BALANCE = "USDC_BALANCE";
+    string private constant REASON_OWNER_ZERO = "OWNER_ZERO";
 
     // --- Custom errors ---
     error PoolActionRejected(string reason);
     error LoanActionRejected(string reason);
     error GovernanceActionRejected(string reason);
+    error BridgeActionRejected(string reason);
 
     // --- Events ---
     event PoolActionEvaluated(
@@ -92,10 +101,18 @@ contract LendingPool is Ownable, ReentrancyGuard {
     event LoanRepaid(address indexed borrower, uint256 amount, uint256 remaining);
     event BorrowerBanned(address indexed borrower);
     event BorrowerUnbanned(address indexed borrower);
+    event ArcUsdcTransferred(address indexed recipient, uint256 amount);
+    event CctpBridgePrepared(address indexed ownerWallet, uint256 amount);
 
     // --- Optional credential gating ---
     address public constant TRUST_MINT_SBT = 0xc570aBb715c7E51801AE7dea5B08Af53c6718BAD;
     uint256 public constant MIN_SCORE_TO_BORROW = 400;
+
+    // --- Circle CCTP constants (ARC Testnet → Polygon Amoy) ---
+    address public constant ARC_USDC_ADDRESS = 0x3600000000000000000000000000000000000000;
+    address public constant CCTP_TOKEN_MESSENGER = 0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA;
+    uint32 public constant CCTP_POLYGON_DOMAIN = 7;
+    uint32 public constant CCTP_DEFAULT_MIN_FINALITY = 1000;
 
     // --- Lender accounting ---
     struct DepositEntry {
@@ -189,6 +206,10 @@ contract LendingPool is Ownable, ReentrancyGuard {
     ) internal {
         _emitLoanEvaluation(action, borrower, false, reason);
         revert LoanActionRejected(reason);
+    }
+
+    function _addressToBytes32(address account) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(account)));
     }
 
     function _evaluateLoanRequest(
@@ -376,6 +397,42 @@ contract LendingPool is Ownable, ReentrancyGuard {
         banned[borrower] = false;
         emit BorrowerUnbanned(borrower);
         _emitLoanEvaluation(ACTION_UNBAN, borrower, true, REASON_OK);
+    }
+
+    // --- Circle CCTP + ARC transfers ---
+    function transferUsdcOnArc(address arcRecipient, uint256 amount) external onlyOwner nonReentrant {
+        if (arcRecipient == address(0)) {
+            revert BridgeActionRejected(REASON_RECIPIENT_ZERO);
+        }
+        if (amount == 0) {
+            revert BridgeActionRejected(REASON_USDC_AMOUNT_ZERO);
+        }
+
+        IERC20 usdc = IERC20(ARC_USDC_ADDRESS);
+        if (usdc.balanceOf(address(this)) < amount) {
+            revert BridgeActionRejected(REASON_USDC_BALANCE);
+        }
+
+        usdc.safeTransfer(arcRecipient, amount);
+        emit ArcUsdcTransferred(arcRecipient, amount);
+    }
+
+    function prepareCctpBridge(uint256 amount) external onlyOwner nonReentrant returns (address ownerWallet) {
+        if (amount == 0) {
+            revert BridgeActionRejected(REASON_USDC_AMOUNT_ZERO);
+        }
+        ownerWallet = owner();
+        if (ownerWallet == address(0)) {
+            revert BridgeActionRejected(REASON_OWNER_ZERO);
+        }
+
+        IERC20 usdc = IERC20(ARC_USDC_ADDRESS);
+        if (usdc.balanceOf(address(this)) < amount) {
+            revert BridgeActionRejected(REASON_USDC_BALANCE);
+        }
+
+        usdc.safeTransfer(ownerWallet, amount);
+        emit CctpBridgePrepared(ownerWallet, amount);
     }
 
     // --- Views ---

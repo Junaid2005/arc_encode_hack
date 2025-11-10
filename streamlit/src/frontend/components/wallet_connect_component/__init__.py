@@ -46,6 +46,7 @@ def connect_wallet(
     require_chain_id: Optional[int] = None,
     tx_request: Optional[dict] = None,
     action: Optional[str] = None,
+    tx_label: Optional[str] = None,
     preferred_address: Optional[str] = None,
     autoconnect: Optional[bool] = None,
     mode: Optional[str] = None,
@@ -60,6 +61,7 @@ def connect_wallet(
         require_chain_id: Optional chain id to enforce/match against the injected wallet.
         tx_request: Optional transaction request dict to be sent via the injected wallet (MetaMask/Rabby).
         action: Optional action hint (e.g., "eth_sendTransaction") for the frontend.
+        tx_label: Optional button label to display for the transaction action.
         preferred_address: Optional cached/remembered address to hint to the UI.
         autoconnect: If True, attempts a silent authorization via eth_accounts on mount.
         mode: Optional mode for the component (e.g., "interactive" or "headless").
@@ -74,6 +76,8 @@ def connect_wallet(
         args["tx_request"] = tx_request
     if action is not None:
         args["action"] = action
+    if tx_label is not None:
+        args["tx_label"] = tx_label
     if preferred_address:
         args["preferred_address"] = preferred_address
     if autoconnect is not None:
@@ -96,6 +100,7 @@ def wallet_command(
     require_chain_id: Optional[int] = None,
     tx_request: Optional[Dict[str, Any]] = None,
     action: Optional[str] = None,
+    tx_label: Optional[str] = None,
     preferred_address: Optional[str] = None,
     autoconnect: Optional[bool] = None,
     command_payload: Optional[Dict[str, Any]] = None,
@@ -114,6 +119,7 @@ def wallet_command(
         require_chain_id=require_chain_id,
         tx_request=tx_request,
         action=action,
+        tx_label=tx_label,
         preferred_address=preferred_address,
         autoconnect=autoconnect,
         mode="headless",

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from web3 import Web3
+from web3.contract import Contract
 
 
 def get_web3_client(rpc_url: Optional[str]) -> Optional[Web3]:
@@ -43,3 +44,41 @@ def load_contract_abi(abi_path: Optional[str]) -> Optional[list[dict[str, Any]]]
         return None
     except Exception:
         return None
+
+
+def encode_contract_call(contract: Contract, fn_name: str, args: Sequence[Any] | None = None) -> str:
+    """Encode a contract function call, compatible with Web3.py v5/v6."""
+    call_args = list(args or [])
+
+    def _try_encode(method_name: str) -> Optional[str]:
+        encode_fn = getattr(contract, method_name, None)
+        if not callable(encode_fn):
+            return None
+        for key in ("fn_name", "function_name"):
+            try:
+                return encode_fn(**{key: fn_name, "args": call_args})
+            except TypeError:
+                continue
+        try:
+            return encode_fn(fn_name, args=call_args)
+        except TypeError:
+            pass
+        try:
+            return encode_fn(fn_name, call_args)
+        except TypeError:
+            pass
+        return None
+
+    for candidate in ("encode_abi", "encodeABI"):
+        encoded = _try_encode(candidate)
+        if encoded is not None:
+            return encoded
+
+    fn = getattr(contract.functions, fn_name)(*call_args)
+    encode_input = getattr(fn, "encode_input", None)
+    if callable(encode_input):
+        return encode_input()
+    encode_tx = getattr(fn, "_encode_transaction_data", None)
+    if callable(encode_tx):
+        return encode_tx()
+    raise AttributeError(f"Unable to encode contract call for '{fn_name}'.")

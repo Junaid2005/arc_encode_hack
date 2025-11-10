@@ -22,6 +22,48 @@ type WalletInfo = {
   error?: string
 }
 
+type ChainMetadata = {
+  chainName: string
+  rpcUrls: string[]
+  blockExplorerUrls?: string[]
+  nativeCurrency: {
+    name: string
+    symbol: string
+    decimals: number
+  }
+}
+
+const CHAIN_METADATA: Record<number, ChainMetadata> = {
+  5042002: {
+    chainName: "Arc Testnet",
+    rpcUrls: ["https://rpc.testnet.arc.network"],
+    blockExplorerUrls: ["https://testnet.arcscan.app"],
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  },
+  80002: {
+    chainName: "Polygon PoS Amoy",
+    rpcUrls: ["https://rpc-amoy.polygon.technology"],
+    blockExplorerUrls: ["https://amoy.polygonscan.com"],
+    nativeCurrency: { name: "MATIC", symbol: "MATIC", decimals: 18 },
+  },
+}
+
+function getChainMetadata(chainId?: number): ChainMetadata | undefined {
+  if (chainId === undefined || chainId === null) {
+    return undefined
+  }
+  return CHAIN_METADATA[chainId]
+}
+
+function buildTxUrl(chainId: number | undefined, txHash: string): string | undefined {
+  if (!chainId) return undefined
+  const metadata = getChainMetadata(chainId)
+  const base = metadata?.blockExplorerUrls?.[0]
+  if (!base) return undefined
+  const trimmed = base.endsWith("/") ? base.slice(0, -1) : base
+  return `${trimmed}/tx/${txHash}`
+}
+
 export default function WalletConnect(): JSX.Element {
   const renderData = useRenderData()
   const disabled = !!renderData.disabled
@@ -32,6 +74,7 @@ export default function WalletConnect(): JSX.Element {
     | undefined
   const txRequest = renderData.args?.["tx_request"] as any
   const action = (renderData.args?.["action"] as string | undefined) ?? undefined
+  const txLabel = (renderData.args?.["tx_label"] as string | undefined) ?? undefined
   const preferredAddress = renderData.args?.["preferred_address"] as string | undefined
   const autoConnect = !!renderData.args?.["autoconnect"]
   const mode = (renderData.args?.["mode"] as string | undefined) ?? "interactive"
@@ -178,6 +221,8 @@ export default function WalletConnect(): JSX.Element {
 
   const expectedHex = expectedNum ? "0x" + expectedNum.toString(16) : undefined
   const connectedHex = connectedNum ? "0x" + connectedNum.toString(16) : undefined
+  const expectedMeta = expectedNum ? getChainMetadata(expectedNum) : undefined
+  const connectedMeta = connectedNum ? getChainMetadata(connectedNum) : undefined
 
   function pretty(value: any): string {
     if (value === undefined || value === null) {
@@ -195,9 +240,19 @@ export default function WalletConnect(): JSX.Element {
 
   const switchNetwork = useCallback(async () => {
     const eth = window.ethereum
-    if (!eth || !expectedHex) {
+    if (!eth || !expectedHex || !expectedNum) {
       return
     }
+    const metadata = getChainMetadata(expectedNum)
+    const chainAddParams = metadata
+      ? [{
+          chainId: expectedHex,
+          chainName: metadata.chainName,
+          nativeCurrency: metadata.nativeCurrency,
+          rpcUrls: metadata.rpcUrls,
+          blockExplorerUrls: metadata.blockExplorerUrls,
+        }]
+      : [{ chainId: expectedHex }]
     try {
       await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: expectedHex }] })
     } catch (e: any) {
@@ -207,18 +262,16 @@ export default function WalletConnect(): JSX.Element {
         try {
           await eth.request({
             method: "wallet_addEthereumChain",
-            params: [{
-              chainId: expectedHex,
-              chainName: "Arc Testnet",
-              nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-              rpcUrls: ["https://rpc.testnet.arc.network"],
-              blockExplorerUrls: ["https://testnet.arcscan.app"],
-            }],
+            params: chainAddParams,
           })
           await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: expectedHex }] })
         } catch (addErr: any) {
           const addMsg = addErr?.message ?? String(addErr)
-          Streamlit.setComponentValue({ warning: "Unable to add/switch Arc Testnet. Please add it manually in MetaMask.", error: addMsg })
+          const chainName = metadata?.chainName ?? `chain ${expectedHex}`
+          Streamlit.setComponentValue({
+            warning: `Unable to add/switch ${chainName}. Please add it manually in MetaMask.`,
+            error: addMsg,
+          })
           return
         }
       } else {
@@ -350,19 +403,23 @@ export default function WalletConnect(): JSX.Element {
               throw new Error("No target chain id supplied for switch_network command.")
             }
             const targetHex = "0x" + targetNum.toString(16)
+            const metadata = getChainMetadata(targetNum)
+            const chainAddParams = metadata
+              ? [{
+                  chainId: targetHex,
+                  chainName: metadata.chainName,
+                  nativeCurrency: metadata.nativeCurrency,
+                  rpcUrls: metadata.rpcUrls,
+                  blockExplorerUrls: metadata.blockExplorerUrls,
+                }]
+              : [{ chainId: targetHex }]
             try {
               await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] })
             } catch (switchErr: any) {
               if (switchErr?.code === 4902) {
                 await eth.request({
                   method: "wallet_addEthereumChain",
-                  params: [{
-                    chainId: targetHex,
-                    chainName: "Arc Testnet",
-                    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-                    rpcUrls: ["https://rpc.testnet.arc.network"],
-                    blockExplorerUrls: ["https://testnet.arcscan.app"],
-                  }],
+                  params: chainAddParams,
                 })
                 await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] })
               } else {
@@ -425,7 +482,7 @@ export default function WalletConnect(): JSX.Element {
       {info.chainId && <div style={{ fontSize: 12, color: "#888" }}>Chain: {info.chainId}</div>}
       {chainMismatch && (
         <div style={{ fontSize: 12, color: "darkorange" }}>
-          Expected chain {String(requireChainId)} ({expectedHex}), but connected to {String(info.chainId)} ({connectedHex})
+          Expected chain {expectedMeta?.chainName ?? String(requireChainId)} ({expectedHex}), but connected to {connectedMeta?.chainName ?? String(info.chainId)} ({connectedHex})
           <div style={{ marginTop: 6 }}>
             <button onClick={switchNetwork} disabled={disabled}>Switch Network</button>
           </div>
@@ -449,18 +506,28 @@ export default function WalletConnect(): JSX.Element {
             border: `1px solid ${borderColor}`,
           }}>{pretty(txRequest)}</pre>
           <button onClick={() => sendTransaction()} disabled={disabled || sending || !info.isConnected || chainMismatch}>
-            {sending ? "Sending…" : (action || "Send Transaction")}
+            {sending ? "Sending…" : (txLabel ?? (action || "Send Transaction"))}
           </button>
           {txResult && (
             <div style={{ fontSize: 12 }}>
               {txResult.txHash ? (
-                <span>
-                  Sent. Tx hash: <code>{txResult.txHash}</code>
-                  {' '}·{' '}
-                  <a href={`https://testnet.arcscan.app/tx/${txResult.txHash}`} target="_blank" rel="noreferrer">
-                    View on Arcscan
-                  </a>
-                </span>
+                (() => {
+                  const txUrl = buildTxUrl(connectedNum, txResult.txHash)
+                  return (
+                    <span>
+                      Sent. Tx hash: <code>{txResult.txHash}</code>
+                      {' '}
+                      {txUrl && (
+                        <>
+                          ·{' '}
+                          <a href={txUrl} target="_blank" rel="noreferrer">
+                            View on Explorer
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  )
+                })()
               ) : (
                 <span style={{ color: "crimson" }}>Error: {String(txResult.error)}</span>
               )}

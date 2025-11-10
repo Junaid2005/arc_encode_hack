@@ -182,6 +182,15 @@ Navigate via the sidebar:
 - Chatbot — Azure OpenAI‑powered assistant with doc uploads for off‑chain parsing
 - MCP Tools — interactive panel for SBT calls: hasSbt, getScore, issueScore, revokeScore
 
+### Owner USDC Tools (Same-Chain & CCTP)
+
+- Configure `ARC_TESTNET_RPC_URL`, `LENDING_POOL_ADDRESS`, and either `ARC_OWNER_PRIVATE_KEY` or `PRIVATE_KEY` in `.env`.
+- In the Streamlit "Wallet Connect" or "MCP Tools" pages you get two distinct flows:
+  - **ARC → ARC** — calls `transferUsdcOnArc` so the lending pool owner can pay any ARC wallet directly (no CCTP involved).
+  - **ARC → Polygon (CCTP)** — calls `prepareCctpBridge` to move USDC from the pool into the owner wallet, then the app signs the Circle Token Messenger `depositForBurn` so the funds can mint on Polygon (or other supported chains) after attestation.
+- The UI surfaces three ARC transactions (prepare, optional allowance approval, burn) plus the Polygon mint payload and transaction helper.
+- Polygon minting still requires test MATIC for gas.
+
 ---
 
 ## Demo Flow (MVP)
