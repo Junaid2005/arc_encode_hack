@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from time import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import streamlit as st
 from web3 import Web3
@@ -10,6 +10,25 @@ from web3 import Web3
 from ..wallet import DEFAULT_SESSION_KEY
 from ..wallet_connect_component import wallet_command
 from .rerun import st_rerun
+
+
+def _normalise_chain_id(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped, 0)
+        except ValueError:
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
 
 
 def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, selected: str) -> None:
@@ -61,6 +80,10 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
 
     if component_value is not None:
         mm_state["last_value"] = component_value
+        if isinstance(component_value, dict):
+            component_chain = _normalise_chain_id(component_value.get("chainId"))
+            if component_chain is not None:
+                mm_state["wallet_chain"] = component_chain
         if (
             isinstance(pending, dict)
             and isinstance(component_value, dict)
@@ -75,6 +98,43 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
             if chain:
                 mm_state["wallet_chain"] = chain
 
+    required_chain_id = _normalise_chain_id(chain_id)
+    wallet_chain_id = _normalise_chain_id(mm_state.get("wallet_chain"))
+    if wallet_chain_id is None:
+        cached_wallet = st.session_state.get(DEFAULT_SESSION_KEY, {})
+        if isinstance(cached_wallet, dict):
+            wallet_chain_id = _normalise_chain_id(cached_wallet.get("chainId"))
+            if wallet_chain_id is not None:
+                mm_state["wallet_chain"] = wallet_chain_id
+
+    chain_mismatch = (
+        required_chain_id is not None
+        and wallet_chain_id is not None
+        and wallet_chain_id != required_chain_id
+    )
+    if chain_mismatch:
+        pending = mm_state.get("pending_command")
+        auto_switch_attempted = bool(mm_state.get("_auto_switch_attempted"))
+        if (
+            required_chain_id is not None
+            and pending is None
+            and not auto_switch_attempted
+        ):
+            sequence = int(time() * 1000)
+            mm_state["pending_command"] = {
+                "command": "switch_network",
+                "payload": {"require_chain_id": required_chain_id},
+                "sequence": sequence,
+            }
+            mm_state["_auto_switch_attempted"] = True
+            st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
+            st_rerun()
+        required_hex = f"0x{required_chain_id:x}"
+        actual_hex = f"0x{wallet_chain_id:x}"
+        st.error(
+            f"Wallet is connected to chain {wallet_chain_id} ({actual_hex}); switch to the required chain {required_chain_id} ({required_hex}) before sending this transaction."
+        )
+
     status_cols = st.columns(2)
     with status_cols[0]:
         wallet_addr = mm_state.get("wallet_address") or preferred_address
@@ -83,8 +143,10 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
         else:
             st.info("No wallet connected yet.")
     with status_cols[1]:
-        if chain_id:
-            st.info(f"Required chain: {chain_id}")
+        if required_chain_id is not None:
+            st.info(f"Required chain: {required_chain_id} (0x{required_chain_id:x})")
+        if wallet_chain_id is not None:
+            st.caption(f"Wallet chain: {wallet_chain_id} (0x{wallet_chain_id:x})")
         if from_address:
             st.caption(f"Requested signer: {from_address}")
 
@@ -110,7 +172,7 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
         st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
         st_rerun()
 
-    send_disabled = tx_req is None
+    send_disabled = tx_req is None or chain_mismatch
     if btn_cols[2].button("Send transaction", key=f"btn_send_{key_prefix}_{selected}", disabled=send_disabled):
         mm_state["pending_command"] = {
             "command": "send_transaction",
@@ -174,3 +236,6 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
     if st.button("Clear MetaMask state", key=f"clear_mm_{key_prefix}_{selected}"):
         st.session_state.pop(f"mm_state_{key_prefix}_{selected}", None)
         st_rerun()
+
+    if not chain_mismatch and mm_state.get("_auto_switch_attempted"):
+        mm_state["_auto_switch_attempted"] = False
