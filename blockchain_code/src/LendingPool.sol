@@ -112,7 +112,8 @@ contract LendingPool is Ownable, ReentrancyGuard {
     address public constant ARC_USDC_ADDRESS = 0x3600000000000000000000000000000000000000;
     address public constant CCTP_TOKEN_MESSENGER = 0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA;
     uint32 public constant CCTP_POLYGON_DOMAIN = 7;
-    uint32 public constant CCTP_DEFAULT_MIN_FINALITY = 1000;
+    // Use Circle's per-chain default finality (0) so attestations become available quickly.
+    uint32 public constant CCTP_DEFAULT_MIN_FINALITY = 0;
 
     // --- Lender accounting ---
     struct DepositEntry {

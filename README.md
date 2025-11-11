@@ -188,8 +188,8 @@ Navigate via the sidebar:
 - In the Streamlit "Wallet Connect" or "MCP Tools" pages you get two distinct flows:
   - **ARC → ARC** — calls `transferUsdcOnArc` so the lending pool owner can pay any ARC wallet directly (no CCTP involved).
   - **ARC → Polygon (CCTP)** — calls `prepareCctpBridge` to move USDC from the pool into the owner wallet, then the app signs the Circle Token Messenger `depositForBurn` so the funds can mint on Polygon (or other supported chains) after attestation.
-- The UI surfaces three ARC transactions (prepare, optional allowance approval, burn) plus the Polygon mint payload and transaction helper.
-- Polygon minting still requires test MATIC for gas.
+- The UI surfaces three ARC transactions (prepare, optional allowance approval, burn) plus the Polygon mint payload. If you set `POLYGON_RPC` and `POLYGON_PRIVATE_KEY`, the app will automatically submit the Polygon `receiveMessage` call; otherwise, it exposes the message & attestation along with a MetaMask “Mint on Polygon” button so you can send the transaction manually.
+- Polygon minting (automatic or manual) still requires the Polygon signer to hold test MATIC for gas.
 
 ---
 

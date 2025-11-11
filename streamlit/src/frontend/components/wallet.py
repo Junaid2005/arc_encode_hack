@@ -14,14 +14,23 @@ from .cctp_bridge import (
     guess_default_lending_pool_abi_path,
     initiate_arc_to_polygon_bridge,
     polygon_explorer_url,
+    resume_arc_to_polygon_bridge,
 )
-from .wallet_connect_component import connect_wallet
+from .wallet_connect_component import connect_wallet, wallet_command
 
 
 DEFAULT_SESSION_KEY = "connected_wallet_info"
 ARC_CHAIN_ID_ENV = "ARC_CHAIN_ID"
 BRIDGE_SESSION_KEY = "cctp_bridge_result"
 ARC_TRANSFER_SESSION_KEY = "arc_transfer_result"
+
+ATTESTATION_POLL_INTERVAL = 5
+ATTESTATION_TIMEOUT = 600
+ATTESTATION_INITIAL_TIMEOUT = 30
+
+POLYGON_COMMAND_STATE_KEY = "polygon_wallet_command"
+POLYGON_COMMAND_SEQ_KEY = "polygon_wallet_command_seq"
+POLYGON_COMMAND_ARGS_KEY = "polygon_wallet_command_args"
 
 
 def _resolve_chain_id() -> Optional[int]:
@@ -108,6 +117,10 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         except (InvalidOperation, ValueError):
             st.warning(f"Unable to parse `{config.GAS_PRICE_GWEI_ENV}` = {gas_price_raw}; using network gas price.")
 
+    polygon_rpc_url = os.getenv(config.POLYGON_RPC_ENV) or os.getenv("POLYGON_RPC_URL")
+    polygon_private_key = os.getenv(config.POLYGON_PRIVATE_KEY_ENV)
+    auto_mint_configured = bool(polygon_rpc_url and polygon_private_key)
+
     polygon_address = _resolve_polygon_address(wallet_info)
     arc_default_recipient = wallet_info.get("address") if isinstance(wallet_info, dict) else ""
 
@@ -126,6 +139,10 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
             st.markdown(f"**Gas limit override:** {gas_limit}")
         if gas_price_wei is not None:
             st.markdown(f"**Gas price override:** {gas_price_wei} wei")
+        if auto_mint_configured:
+            st.markdown("**Polygon auto-mint:** enabled")
+        else:
+            st.markdown("**Polygon auto-mint:** disabled (manual mint required)")
 
     st.markdown("### ARC Same-Chain Transfer")
     transfer_state: Optional[Dict[str, Any]] = st.session_state.get(ARC_TRANSFER_SESSION_KEY)
@@ -193,6 +210,8 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
 
     bridge_state: Optional[Dict[str, Any]] = st.session_state.get(BRIDGE_SESSION_KEY)
 
+    bridge_status_box = st.empty()
+
     with st.form("cctp_bridge_form"):
         st.markdown(f"**Destination Polygon address:** `{polygon_address}`")
         amount_input = st.text_input("Amount to bridge (USDC)", value="0.10")
@@ -201,8 +220,19 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
     if submitted_bridge:
         st.session_state.pop(BRIDGE_SESSION_KEY, None)
         bridge_logs: list[str] = []
+        bridge_status_box.info(
+            "Submitting bridge transactions… Circle typically needs a few minutes to finalise the attestation."
+        )
+
+        def log_to_ui(message: str) -> None:
+            bridge_logs.append(message)
+            # show the most recent messages to avoid huge blocks of text
+            bridge_status_box.code("\n".join(bridge_logs[-40:]), language="text")
+
         try:
-            with st.spinner("Preparing CCTP burn and waiting for Circle attestation…"):
+            with st.spinner(
+                "Submitting CCTP transactions. Circle attestation typically finalises after ~5 minutes."
+            ):
                 result = initiate_arc_to_polygon_bridge(
                     polygon_address=polygon_address,
                     amount_input=amount_input,
@@ -212,21 +242,35 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
                     private_key=private_key or "",
                     gas_limit=gas_limit,
                     gas_price_wei=gas_price_wei,
-                    log=bridge_logs.append,
+                    polygon_rpc_url=polygon_rpc_url,
+                    polygon_private_key=polygon_private_key,
+                    attestation_poll_interval=ATTESTATION_POLL_INTERVAL,
+                    attestation_timeout=ATTESTATION_TIMEOUT,
+                    wait_for_attestation=False,
+                    attestation_initial_timeout=ATTESTATION_INITIAL_TIMEOUT,
+                    log=log_to_ui,
                 )
             bridge_state = result.to_state()
             st.session_state[BRIDGE_SESSION_KEY] = bridge_state
-            st.success("Circle attestation received. Continue with the Polygon mint step below.")
+            if bridge_state.get("status") == "complete":
+                st.success("Circle attestation received. Continue with the Polygon mint step below.")
+            else:
+                st.info(
+                    "ARC transactions confirmed. Circle attestation is still pending — refresh below once finality is reached."
+                )
+            bridge_status_box.code("\n".join(bridge_logs[-40:]), language="text")
             if bridge_logs:
                 with st.expander("Bridge log", expanded=False):
                     st.code("\n".join(bridge_logs), language="text")
         except BridgeError as err:
             st.error(f"CCTP bridge failed: {err}")
+            bridge_status_box.code("\n".join(bridge_logs[-40:]), language="text")
             if bridge_logs:
                 with st.expander("Bridge log", expanded=True):
                     st.code("\n".join(bridge_logs), language="text")
         except Exception as err:
             st.error(f"Unexpected bridge error: {err}")
+            bridge_status_box.code("\n".join(bridge_logs[-40:]), language="text")
             if bridge_logs:
                 with st.expander("Bridge log", expanded=True):
                     st.code("\n".join(bridge_logs), language="text")
@@ -250,35 +294,160 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         st.markdown(
             f"- **Allowance approval:** [`{approve_hash}`]({approve_explorer})"
         )
+    attestation_url = bridge_state.get("attestation_url")
+    if attestation_url:
+        st.markdown(f"- **Circle attestation API:** [{attestation_url}]({attestation_url})")
 
     st.markdown("### Step 2 — Mint USDC on Polygon PoS Amoy")
+
+    status = bridge_state.get("status", "complete")
+    attestation_error = bridge_state.get("attestation_error")
+
+    if status != "complete":
+        pending_box = st.empty()
+        pending_box.warning(
+            "Circle attestation not ready yet. Expect roughly 2,000 ARC blocks of finality (≈5 minutes). "
+            "Click the button below to refresh once Circle publishes the attestation."
+        )
+        if attestation_error:
+            with st.expander("Latest attestation status", expanded=False):
+                st.code(attestation_error, language="text")
+
+        refresh_logs: list[str] = []
+
+        def refresh_log_to_ui(message: str) -> None:
+            refresh_logs.append(message)
+            pending_box.code("\n".join(refresh_logs[-40:]), language="text")
+
+        if st.button("Refresh Circle attestation", key="refresh_cctp_attestation"):
+            try:
+                resume_result = resume_arc_to_polygon_bridge(
+                    polygon_address=bridge_state["polygon_address"],
+                    amount_usdc=bridge_state["amount_usdc"],
+                    amount_base_units=bridge_state["amount_base_units"],
+                    prepare_tx_hash=bridge_state["prepare_tx_hash"],
+                    prepare_tx_explorer=bridge_state["prepare_tx_explorer"],
+                    burn_tx_hash=bridge_state["burn_tx_hash"],
+                    burn_tx_explorer=bridge_state["burn_tx_explorer"],
+                    rpc_url=arc_rpc_url or "",
+                    polygon_rpc_url=polygon_rpc_url,
+                    polygon_private_key=polygon_private_key,
+                    gas_limit=gas_limit,
+                    gas_price_wei=gas_price_wei,
+                    attestation_poll_interval=ATTESTATION_POLL_INTERVAL,
+                    attestation_timeout=ATTESTATION_TIMEOUT,
+                    nonce=bridge_state.get("nonce"),
+                    approve_tx_hash=bridge_state.get("approve_tx_hash"),
+                    approve_tx_explorer=bridge_state.get("approve_tx_explorer"),
+                    log=refresh_log_to_ui,
+                )
+            except BridgeError as err:
+                pending_box.info(f"Circle attestation still pending: {err}")
+                if refresh_logs:
+                    with st.expander("Bridge log", expanded=True):
+                        st.code("\n".join(refresh_logs), language="text")
+            else:
+                updated_state = resume_result.to_state()
+                st.session_state[BRIDGE_SESSION_KEY] = updated_state
+                st.success("Circle attestation is ready. Continue with the Polygon mint step below.", icon="✅")
+                if refresh_logs:
+                    with st.expander("Bridge log", expanded=False):
+                        st.code("\n".join(refresh_logs), language="text")
+                st.experimental_rerun()
+        return
+
+    message_hex = bridge_state.get("message_hex")
+    attestation_hex = bridge_state.get("attestation_hex")
+    if not message_hex or not attestation_hex:
+        st.error("Attestation payload missing from bridge state. Refresh the attestation above.")
+        if st.button("Clear bridge session", key="clear_cctp_session_missing_payload"):
+            st.session_state.pop(BRIDGE_SESSION_KEY, None)
+            st.experimental_rerun()
+        return
+
     with st.expander("Message & attestation payload", expanded=False):
-        st.code(bridge_state["message_hex"], language="text")
-        st.code(bridge_state["attestation_hex"], language="text")
+        st.code(message_hex, language="text")
+        st.code(attestation_hex, language="text")
 
     tx_request = bridge_state.get("tx_request")
     if tx_request is None:
         st.error("Bridge state missing tx_request payload.")
     else:
-        polygon_payload = connect_wallet(
-            key="polygon_cctp_receive",
-            require_chain_id=POLYGON_AMOY_CHAIN_ID,
-            tx_request=tx_request,
-            action="eth_sendTransaction",
-            tx_label="Mint USDC on Polygon",
-            preferred_address=polygon_address,
-            autoconnect=True,
+        with st.expander("Polygon transaction payload (advanced)", expanded=False):
+            st.json(tx_request)
+
+        status_box = st.empty()
+        status_box.info(
+            "MetaMask must submit this Polygon transaction. Make sure your wallet is connected, switched to Polygon "
+            "PoS Amoy, and has test MATIC before sending."
         )
 
-        if isinstance(polygon_payload, dict):
-            if polygon_payload.get("txHash"):
-                mint_hash = polygon_payload["txHash"]
+        polygon_logs: list[str] = st.session_state.get("polygon_wallet_logs", [])
+
+        action_col, clear_col = st.columns([3, 1])
+        with action_col:
+            if st.button("Submit mint via MetaMask", key="polygon_mint_button"):
+                polygon_logs.append("→ requesting MetaMask signature…")
+                st.session_state["polygon_wallet_logs"] = polygon_logs
+                next_seq = st.session_state.get(POLYGON_COMMAND_SEQ_KEY, 0) + 1
+                st.session_state[POLYGON_COMMAND_SEQ_KEY] = next_seq
+                st.session_state[POLYGON_COMMAND_STATE_KEY] = "send_transaction"
+                st.session_state[POLYGON_COMMAND_ARGS_KEY] = {
+                    "tx_request": tx_request,
+                    "action": "eth_sendTransaction",
+                }
+
+        with clear_col:
+            if st.button("Clear Polygon log", key="clear_polygon_log"):
+                st.session_state.pop("polygon_wallet_logs", None)
+                polygon_logs = []
+
+        command = st.session_state.get(POLYGON_COMMAND_STATE_KEY)
+        command_sequence = st.session_state.get(POLYGON_COMMAND_SEQ_KEY)
+        command_args = st.session_state.get(POLYGON_COMMAND_ARGS_KEY) or {}
+
+        component_payload = wallet_command(
+            key="polygon_cctp_receive_headless",
+            command=command,
+            command_sequence=command_sequence,
+            require_chain_id=POLYGON_AMOY_CHAIN_ID,
+            tx_request=tx_request if command == "send_transaction" else None,
+            action="eth_sendTransaction" if command == "send_transaction" else None,
+            preferred_address=polygon_address,
+            autoconnect=True,
+            command_payload=command_args,
+        )
+
+        if command and component_payload:
+            if component_payload.get("status") == "sent" and component_payload.get("txHash"):
+                mint_hash = component_payload["txHash"]
+                polygon_logs.append(f"✔ mint transaction sent: {mint_hash}")
+                st.session_state["polygon_wallet_logs"] = polygon_logs
+                status_box.success("Polygon mint transaction submitted.", icon="✅")
                 st.success(f"Mint transaction sent: `{mint_hash}`", icon="✅")
                 st.markdown(f"[View on Polygonscan]({polygon_explorer_url(mint_hash)})")
-            elif polygon_payload.get("warning"):
-                st.warning(str(polygon_payload["warning"]))
-            elif polygon_payload.get("error"):
-                st.error(str(polygon_payload["error"]))
+            elif component_payload.get("error"):
+                error_msg = str(component_payload["error"])
+                polygon_logs.append(f"✖ error: {error_msg}")
+                st.session_state["polygon_wallet_logs"] = polygon_logs
+                status_box.error(error_msg)
+            elif component_payload.get("warning"):
+                warning_msg = str(component_payload["warning"])
+                polygon_logs.append(f"! warning: {warning_msg}")
+                st.session_state["polygon_wallet_logs"] = polygon_logs
+                status_box.warning(warning_msg)
+            else:
+                polygon_logs.append(f"(info) payload: {component_payload}")
+                st.session_state["polygon_wallet_logs"] = polygon_logs
+            st.session_state[POLYGON_COMMAND_STATE_KEY] = None
+            st.session_state[POLYGON_COMMAND_ARGS_KEY] = None
+
+        polygon_logs = st.session_state.get("polygon_wallet_logs", [])
+        if polygon_logs:
+            with st.expander("Polygon wallet log", expanded=True):
+                st.code("\n".join(polygon_logs), language="text")
+        else:
+            st.info("No Polygon wallet events yet. Click the button above to send the transaction.")
 
     st.caption("You will need test MATIC on Polygon Amoy to submit the mint transaction.")
 

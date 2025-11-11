@@ -14,6 +14,8 @@ BRIDGE_PRIVATE_KEY_ENV = "ARC_OWNER_PRIVATE_KEY"
 USDC_DECIMALS_ENV = "ARC_USDC_DECIMALS"  # not used by SBT tools, but kept for compatibility
 GAS_LIMIT_ENV = "ARC_GAS_LIMIT"
 GAS_PRICE_GWEI_ENV = "ARC_GAS_PRICE_GWEI"
+POLYGON_RPC_ENV = "POLYGON_RPC"
+POLYGON_PRIVATE_KEY_ENV = "POLYGON_PRIVATE_KEY"
 
 # Helper so callers can resolve the SBT address consistently
 import os
