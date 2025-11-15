@@ -90,13 +90,12 @@ A credit‑infrastructure MVP on Arc that lets underserved creators and SMBs acc
 ## Quickstart
 
 Prereqs
-- Python 3.10+ (repo includes a venv with 3.13)
+- Python 3.12
 - Foundry (forge, cast). Install: `curl -L https://foundry.paradigm.xyz | bash && foundryup`
 
 1) Clone + setup Python deps
 
 ```bash
-cd /Users/abdulaaqib/Developer/Github/arc_encode_hack
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
