@@ -3,7 +3,6 @@ from __future__ import annotations
 import shlex
 from typing import Optional
 
-
 def parse_int(token: str) -> Optional[int]:
     if not token or token.startswith("$"):
         return None
@@ -54,3 +53,4 @@ def check_amount_limits(command: str) -> Optional[str]:
             return f"no numeric amount found for {normalized}"
 
     return None
+

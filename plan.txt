@@ -1,0 +1,51 @@
+Plan: Integrate MCP tools into chatbot with SBT-gated loan access and Polygon bridge
+
+Objective 1 — Audit existing surfaces
+- Goal: understand current coverage gaps between chatbot and MCP Tools page.
+- Actions:
+  1. Inspect `streamlit/src/frontend/components/chatbot_lib/page.py` to list current tool schemas and function map.
+  2. Review `render_mcp_tools_page` plus helpers to enumerate role assignment UI, tool runners, ARC transfer, CCTP bridge, and MetaMask command handling.
+  3. Produce a delta summary capturing features absent from the chatbot.
+
+Objective 2 — Unify tool availability
+- Goal: expose the full set of MCP tools through the chatbot.
+- Actions:
+  1. Refactor shared tooling into reusable modules (role-aware tool runners, bridge helpers, parameter defaults).
+  2. Extend chatbot initialization to import those modules, merge tool schemas (SBT, LendingPool, bridge), and register handler functions.
+  3. Confirm tool names and payloads match the MCP page to keep Azure tool-calling consistent.
+
+Objective 3 — Enforce SBT prerequisite for loans
+- Goal: prevent loan tooling from running unless the borrower holds the TrustMint SBT.
+- Actions:
+  1. Implement a reusable guard (e.g., `ensure_sbt_holder(wallet_address)`) that wraps LendingPool actions requiring borrower eligibility.
+  2. Wire the guard into MCP tool handlers (`openLoan`, `repay`, `checkDefaultAndBan`, etc.) and surface explanatory errors when the SBT check fails.
+  3. Share the guard between chatbot and MCP page to keep behavior aligned.
+
+Objective 4 — Capture chain preference and branch flows
+- Goal: let the LLM decide whether to service loans on ARC or route funds to Polygon.
+- Actions:
+  1. Add a lightweight tool or state setter that records user chain choice (`ARC` default).
+  2. For ARC choice, allow standard LendingPool tools to execute unchanged.
+  3. For Polygon choice, orchestrate the Circle CCTP pipeline: ARC burn, attestation polling, Polygon mint (MetaMask-guided if needed), returning status updates to the chat.
+
+Objective 5 — Coordinate wallets and MetaMask
+- Goal: ensure the chatbot can request signatures, network switches, and role assignments like the MCP Tools page.
+- Actions:
+  1. Reuse MetaMask command sequencing (`wallet_command`) and state keys from `mcp_lib/tool_runner.py`.
+  2. Persist role assignments (Owner/Lender/Borrower) and detect when env private keys vs MetaMask should sign.
+  3. Surface actionable prompts when wallet connection or chain switching is required.
+
+Objective 6 — Improve UX, logging, and safety
+- Goal: keep users informed and handle failure scenarios gracefully.
+- Actions:
+  1. Update chatbot responses to explain prerequisites (env vars, gas balances, MetaMask prompts) before running sensitive tools.
+  2. Integrate logging helpers to stream progress (ARC transfer logs, bridge logs, Polygon status) into the chat.
+  3. Provide actionable remediation text for common errors (missing envs, insufficient liquidity, attestation delays).
+
+Objective 7 — Validate and document
+- Goal: confirm end-to-end behavior and communicate changes.
+- Actions:
+  1. Manually test SBT lookup, SBT-gated loan rejection, ARC loan success, ARC→Polygon bridging, and Polygon mint via MetaMask.
+  2. Update README or in-app help to describe the chatbot’s expanded MCP capabilities and chain-selection workflow.
+  3. Record follow-up tasks (tests, env setup docs) discovered during validation.
+

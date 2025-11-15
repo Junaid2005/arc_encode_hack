@@ -1,5 +1,4 @@
 """Circle CCTP helpers for ARC Testnet → Polygon PoS Amoy bridging."""
-
 from __future__ import annotations
 
 import base64
@@ -44,11 +43,7 @@ LOGGER_NAME = "arc.cctp_bridge"
 logger = logging.getLogger(LOGGER_NAME)
 if not logger.handlers:
     handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter(
-            "[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"
-        )
-    )
+    handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"))
     handler.setLevel(logging.INFO)
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
@@ -86,48 +81,13 @@ TOKEN_MESSENGER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {
-                "indexed": True,
-                "internalType": "uint64",
-                "name": "nonce",
-                "type": "uint64",
-            },
-            {
-                "indexed": True,
-                "internalType": "address",
-                "name": "burnToken",
-                "type": "address",
-            },
-            {
-                "indexed": True,
-                "internalType": "address",
-                "name": "burner",
-                "type": "address",
-            },
-            {
-                "indexed": False,
-                "internalType": "uint256",
-                "name": "amount",
-                "type": "uint256",
-            },
-            {
-                "indexed": False,
-                "internalType": "uint32",
-                "name": "destinationDomain",
-                "type": "uint32",
-            },
-            {
-                "indexed": False,
-                "internalType": "bytes32",
-                "name": "mintRecipient",
-                "type": "bytes32",
-            },
-            {
-                "indexed": False,
-                "internalType": "bytes32",
-                "name": "destinationCaller",
-                "type": "bytes32",
-            },
+            {"indexed": True, "internalType": "uint64", "name": "nonce", "type": "uint64"},
+            {"indexed": True, "internalType": "address", "name": "burnToken", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "burner", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"},
+            {"indexed": False, "internalType": "uint32", "name": "destinationDomain", "type": "uint32"},
+            {"indexed": False, "internalType": "bytes32", "name": "mintRecipient", "type": "bytes32"},
+            {"indexed": False, "internalType": "bytes32", "name": "destinationCaller", "type": "bytes32"},
         ],
         "name": "DepositForBurn",
         "type": "event",
@@ -193,10 +153,7 @@ class BridgeResult:
     def tx_request(self) -> Dict[str, str]:
         if not self.receive_message_call_data:
             raise BridgeError("Polygon receiveMessage call data is not available yet.")
-        return {
-            "to": MESSAGE_TRANSMITTER_ADDRESS,
-            "data": self.receive_message_call_data,
-        }
+        return {"to": MESSAGE_TRANSMITTER_ADDRESS, "data": self.receive_message_call_data}
 
     def to_state(self) -> Dict[str, Any]:
         state: Dict[str, Any] = {
@@ -209,7 +166,7 @@ class BridgeResult:
             "burn_tx_explorer": self.burn_tx_explorer,
             "nonce": self.nonce,
             "status": self.status,
-            "attestation_url": f"{IRIS_API_BASE_URL}/{ARC_DOMAIN_ID}?transactionHash={self.burn_tx_hash}",
+        "attestation_url": f"{IRIS_API_BASE_URL}/{ARC_DOMAIN_ID}?transactionHash={self.burn_tx_hash}",
         }
         if self.message_hex:
             state["message_hex"] = self.message_hex
@@ -254,26 +211,18 @@ class ArcTransferResult:
 def guess_default_lending_pool_abi_path() -> Optional[str]:
     """Return the foundry artifact path for LendingPool if it exists."""
     root = Path(__file__).resolve().parents[4]
-    candidate = (
-        root / "blockchain_code" / "out" / "LendingPool.sol" / "LendingPool.json"
-    )
+    candidate = root / "blockchain_code" / "out" / "LendingPool.sol" / "LendingPool.json"
     return str(candidate) if candidate.exists() else None
 
 
 def _parse_usdc_amount(raw_amount: str | float | int | Decimal) -> Tuple[Decimal, int]:
     try:
-        amount_dec = (
-            raw_amount if isinstance(raw_amount, Decimal) else Decimal(str(raw_amount))
-        )
+        amount_dec = raw_amount if isinstance(raw_amount, Decimal) else Decimal(str(raw_amount))
     except (InvalidOperation, ValueError) as exc:
         raise BridgeError("Amount must be a numeric value.") from exc
     if amount_dec <= 0:
         raise BridgeError("Amount must be greater than zero.")
-    base_units = int(
-        (amount_dec * (Decimal(10) ** USDC_DECIMALS)).to_integral_value(
-            rounding=ROUND_DOWN
-        )
-    )
+    base_units = int((amount_dec * (Decimal(10) ** USDC_DECIMALS)).to_integral_value(rounding=ROUND_DOWN))
     if base_units <= 0:
         raise BridgeError("Amount too small after converting to USDC base units.")
     return amount_dec, base_units
@@ -284,9 +233,7 @@ def _address_to_bytes32(value: str) -> bytes:
     return int(checksum, 16).to_bytes(32, "big")
 
 
-def _compose_log(
-    log_callback: Optional[Callable[[str], None]],
-) -> Callable[[str], None]:
+def _compose_log(log_callback: Optional[Callable[[str], None]]) -> Callable[[str], None]:
     def _log(message: str) -> None:
         text = str(message)
         if log_callback is not None:
@@ -312,15 +259,10 @@ def _ensure_hex_bytes(value: str, label: str) -> str:
     return "0x" + decoded.hex()
 
 
-def _encode_receive_message_call_data(
-    w3: Web3, message_hex: str, attestation_hex: str
-) -> str:
+def _encode_receive_message_call_data(w3: Web3, message_hex: str, attestation_hex: str) -> str:
     message_bytes = bytes.fromhex(message_hex[2:])
     attestation_bytes = bytes.fromhex(attestation_hex[2:])
-    mt = w3.eth.contract(
-        address=Web3.to_checksum_address(MESSAGE_TRANSMITTER_ADDRESS),
-        abi=MESSAGE_TRANSMITTER_ABI,
-    )
+    mt = w3.eth.contract(address=Web3.to_checksum_address(MESSAGE_TRANSMITTER_ADDRESS), abi=MESSAGE_TRANSMITTER_ABI)
     if hasattr(mt, "encodeABI"):
         return mt.encodeABI(fn_name="receiveMessage", args=[message_bytes, attestation_bytes])  # type: ignore[attr-defined]
     if hasattr(mt, "encode_abi"):
@@ -331,9 +273,7 @@ def _encode_receive_message_call_data(
     tx = fn.build_transaction({"from": Web3.to_checksum_address("0x0000000000000000000000000000000000000001")})  # type: ignore[call-arg]
     data = tx.get("data")
     if not data:
-        raise BridgeError(
-            "Unable to encode receiveMessage call data with current web3.py version."
-        )
+        raise BridgeError("Unable to encode receiveMessage call data with current web3.py version.")
     return str(data)
 
 
@@ -385,14 +325,10 @@ def _load_lending_pool_abi(path: Optional[str]) -> list[Dict[str, Any]]:
         abi = load_contract_abi(guessed)
         if abi:
             return abi
-    raise BridgeError(
-        "Unable to load LendingPool ABI. Set LENDING_POOL_ABI_PATH or build the contract artifact."
-    )
+    raise BridgeError("Unable to load LendingPool ABI. Set LENDING_POOL_ABI_PATH or build the contract artifact.")
 
 
-def _apply_gas_values(
-    w3: Web3, tx: Dict[str, Any], gas_limit: Optional[int], gas_price_wei: Optional[int]
-) -> None:
+def _apply_gas_values(w3: Web3, tx: Dict[str, Any], gas_limit: Optional[int], gas_price_wei: Optional[int]) -> None:
     tx.setdefault("value", 0)
     if gas_limit is not None:
         tx["gas"] = gas_limit
@@ -451,12 +387,8 @@ def transfer_arc_usdc(
     _log("Loading lending pool contract…")
     pool = _load_contract(w3, contract_address, abi)
 
-    usdc = w3.eth.contract(
-        address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI
-    )
-    pool_balance = usdc.functions.balanceOf(
-        Web3.to_checksum_address(contract_address)
-    ).call()
+    usdc = w3.eth.contract(address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI)
+    pool_balance = usdc.functions.balanceOf(Web3.to_checksum_address(contract_address)).call()
     if pool_balance < amount_base_units:
         raise BridgeError(
             "Lending pool USDC balance is insufficient for the requested bridge amount. Reduce the amount or fund the pool."
@@ -470,9 +402,7 @@ def transfer_arc_usdc(
 
     _log("Building transfer transaction…")
     nonce = w3.eth.get_transaction_count(owner.address)
-    tx = pool.functions.transferUsdcOnArc(
-        recipient_checksum, amount_base_units
-    ).build_transaction(
+    tx = pool.functions.transferUsdcOnArc(recipient_checksum, amount_base_units).build_transaction(
         {
             "from": owner.address,
             "nonce": nonce,
@@ -496,9 +426,7 @@ def transfer_arc_usdc(
 
     try:
         _log("Waiting for transfer confirmation…")
-        receipt = w3.eth.wait_for_transaction_receipt(
-            tx_hash, timeout=confirmation_timeout
-        )
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=confirmation_timeout)
     except Exception as exc:
         raise BridgeError(f"ARC transfer not confirmed: {exc}") from exc
     if receipt.status != 1:
@@ -560,9 +488,7 @@ def _auto_mint_on_polygon(
     try:
         signed_tx = account.sign_transaction(tx)
     except Exception as exc:
-        raise BridgeError(
-            f"Failed to sign Polygon receiveMessage transaction: {exc}"
-        ) from exc
+        raise BridgeError(f"Failed to sign Polygon receiveMessage transaction: {exc}") from exc
 
     raw_deposit = getattr(signed_tx, "raw_transaction", None)
     if raw_deposit is None:
@@ -573,15 +499,11 @@ def _auto_mint_on_polygon(
     try:
         tx_hash = w3.eth.send_raw_transaction(raw_deposit)
     except Exception as exc:
-        raise BridgeError(
-            f"Error broadcasting Polygon receiveMessage transaction: {exc}"
-        ) from exc
+        raise BridgeError(f"Error broadcasting Polygon receiveMessage transaction: {exc}") from exc
 
     log(f"Polygon receiveMessage broadcast: {tx_hash.hex()}. Waiting for confirmation…")
     try:
-        receipt = w3.eth.wait_for_transaction_receipt(
-            tx_hash, timeout=confirmation_timeout
-        )
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=confirmation_timeout)
     except Exception as exc:
         raise BridgeError(f"Polygon receiveMessage not confirmed: {exc}") from exc
     if receipt.status != 1:
@@ -601,7 +523,6 @@ def poll_attestation(
     log: Optional[Callable[[str], None]] = None,
 ) -> Tuple[str, str]:
     tx_hash = _normalise_tx_hash(tx_hash)
-
     def emit(message: str) -> None:
         text = str(message)
         if log is not None:
@@ -625,9 +546,7 @@ def poll_attestation(
         try:
             response = requests.get(url, headers=headers, timeout=30)
         except requests.RequestException as exc:
-            emit(
-                f"Circle attestation request error on attempt {attempt}: {exc}. Retrying in {interval}s…"
-            )
+            emit(f"Circle attestation request error on attempt {attempt}: {exc}. Retrying in {interval}s…")
             raise BridgeError(f"Error contacting Circle IRIS API: {exc}") from exc
         if response.status_code == 200:
             payload = response.json()
@@ -637,12 +556,7 @@ def poll_attestation(
                 status = str(entry.get("status", "")).lower()
                 message = entry.get("message")
                 attestation = entry.get("attestation")
-                if (
-                    status == "complete"
-                    and message
-                    and attestation
-                    and attestation != "pending"
-                ):
+                if status == "complete" and message and attestation and attestation != "pending":
                     emit(f"Circle attestation complete on attempt {attempt}.")
                     return str(message), str(attestation)
                 emit(
@@ -650,9 +564,7 @@ def poll_attestation(
                     f"Retrying in {interval}s…"
                 )
             else:
-                emit(
-                    f"No Circle attestation messages yet (attempt {attempt}). Retrying in {interval}s…"
-                )
+                emit(f"No Circle attestation messages yet (attempt {attempt}). Retrying in {interval}s…")
         else:
             body = ""
             try:
@@ -702,12 +614,8 @@ def initiate_arc_to_polygon_bridge(
     abi = _load_lending_pool_abi(contract_abi_path)
     pool = _load_contract(w3, contract_address, abi)
 
-    usdc = w3.eth.contract(
-        address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI
-    )
-    pool_balance = usdc.functions.balanceOf(
-        Web3.to_checksum_address(contract_address)
-    ).call()
+    usdc = w3.eth.contract(address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI)
+    pool_balance = usdc.functions.balanceOf(Web3.to_checksum_address(contract_address)).call()
     if pool_balance < amount_base_units:
         raise BridgeError(
             "Lending pool USDC balance is insufficient for the requested bridge amount. Reduce the amount or fund the pool."
@@ -752,9 +660,7 @@ def initiate_arc_to_polygon_bridge(
 
     try:
         _log("Waiting for prepare transaction confirmation…")
-        prepare_receipt = w3.eth.wait_for_transaction_receipt(
-            prepare_hash, timeout=attestation_timeout
-        )
+        prepare_receipt = w3.eth.wait_for_transaction_receipt(prepare_hash, timeout=attestation_timeout)
     except Exception as exc:
         raise BridgeError(f"Bridge preparation not confirmed: {exc}") from exc
     if prepare_receipt.status != 1:
@@ -777,9 +683,7 @@ def initiate_arc_to_polygon_bridge(
     approve_tx_explorer: Optional[str] = None
     if allowance < amount_base_units:
         _log("Allowance insufficient; building approval transaction…")
-        approve_tx = usdc.functions.approve(
-            TOKEN_MESSENGER_ADDRESS, amount_base_units
-        ).build_transaction(
+        approve_tx = usdc.functions.approve(TOKEN_MESSENGER_ADDRESS, amount_base_units).build_transaction(
             {
                 "from": owner.address,
                 "nonce": nonce_counter,
@@ -808,9 +712,7 @@ def initiate_arc_to_polygon_bridge(
 
         try:
             _log("Waiting for approval confirmation…")
-            approve_receipt = w3.eth.wait_for_transaction_receipt(
-                approve_hash, timeout=attestation_timeout
-            )
+            approve_receipt = w3.eth.wait_for_transaction_receipt(approve_hash, timeout=attestation_timeout)
         except Exception as exc:
             raise BridgeError(f"USDC approval not confirmed: {exc}") from exc
         if approve_receipt.status != 1:
@@ -865,15 +767,11 @@ def initiate_arc_to_polygon_bridge(
             raw_deposit = signed_deposit
         burn_hash = w3.eth.send_raw_transaction(raw_deposit)
     except Exception as exc:
-        raise BridgeError(
-            f"Error broadcasting depositForBurn transaction: {exc}"
-        ) from exc
+        raise BridgeError(f"Error broadcasting depositForBurn transaction: {exc}") from exc
 
     try:
         _log("Waiting for depositForBurn confirmation…")
-        burn_receipt = w3.eth.wait_for_transaction_receipt(
-            burn_hash, timeout=attestation_timeout
-        )
+        burn_receipt = w3.eth.wait_for_transaction_receipt(burn_hash, timeout=attestation_timeout)
     except Exception as exc:
         raise BridgeError(f"depositForBurn transaction not confirmed: {exc}") from exc
     if burn_receipt.status != 1:
@@ -940,9 +838,7 @@ def initiate_arc_to_polygon_bridge(
             message_hex = _ensure_hex_bytes(message, "message")
             attestation_hex = _ensure_hex_bytes(attestation, "attestation")
             _log("Attestation received. Preparing Polygon call data…")
-            call_data = _encode_receive_message_call_data(
-                w3, message_hex, attestation_hex
-            )
+            call_data = _encode_receive_message_call_data(w3, message_hex, attestation_hex)
 
     auto_mint_tx_hash: Optional[str] = None
     auto_mint_tx_explorer: Optional[str] = None

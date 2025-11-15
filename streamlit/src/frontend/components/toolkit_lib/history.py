@@ -20,3 +20,4 @@ def render_llm_history(messages: Iterable[Dict[str, Any]]) -> None:
                 st.markdown(content or "")
         elif role == "tool":
             render_tool_message(message.get("name", "tool"), content or "")
+

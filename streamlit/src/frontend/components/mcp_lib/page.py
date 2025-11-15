@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 from decimal import Decimal, InvalidOperation
@@ -28,71 +29,72 @@ from ..config import (
 from ..cctp_bridge import (
     POLYGON_AMOY_CHAIN_ID,
     BridgeError,
-    guess_default_lending_pool_abi_path,
     initiate_arc_to_polygon_bridge,
     polygon_explorer_url,
     resume_arc_to_polygon_bridge,
     transfer_arc_usdc,
 )
+
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit
+from ..verification.score_calculator import wallet_summary_to_score
+from ..verification.verification_flow import run_verification_flow
 from ..wallet_connect_component import connect_wallet, wallet_command
 from ..web3_utils import get_web3_client, load_contract_abi
-from .tool_runner import render_tool_runner
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
+from .logging_utils import get_metamask_logger
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
 
-LOGGER_NAME = "arc.mcp_polygon"
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
+from .logging_utils import get_metamask_logger
+from .rerun import st_rerun
+from .tool_runner import render_tool_runner
+from .constants import (
+    LOGGER_NAME,
+    SBT_TOOL_ROLES,
+    POOL_TOOL_ROLES,
+    MCP_BRIDGE_SESSION_KEY,
+    MCP_ARC_TRANSFER_SESSION_KEY,
+    MCP_POLYGON_COMMAND_KEY,
+    MCP_POLYGON_COMMAND_SEQ_KEY,
+    MCP_POLYGON_COMMAND_ARGS_KEY,
+    MCP_POLYGON_COMMAND_REASON_KEY,
+    MCP_POLYGON_COMMAND_LOGGED_KEY,
+    MCP_POLYGON_LOGS_KEY,
+    MCP_POLYGON_PENDING_TX_KEY,
+    MCP_POLYGON_WALLET_STATE_KEY,
+    MCP_POLYGON_AUTO_SWITCH_KEY,
+    MCP_POLYGON_STATUS_KEY,
+    MCP_POLYGON_COMPLETE_KEY,
+    ATTESTATION_POLL_INTERVAL,
+    ATTESTATION_TIMEOUT,
+    ATTESTATION_INITIAL_TIMEOUT,
+)
+
 polygon_logger = logging.getLogger(LOGGER_NAME)
 if not polygon_logger.handlers:
     handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter(
-            "[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"
-        )
-    )
+    handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"))
     polygon_logger.addHandler(handler)
 polygon_logger.setLevel(logging.INFO)
 polygon_logger.propagate = False
 
-_SBT_TOOL_ROLES = {
-    "hasSbt": "Read-only",
-    "getScore": "Read-only",
-    "issueScore": "Owner",
-    "revokeScore": "Owner",
-}
-
-_POOL_TOOL_ROLES = {
-    "availableLiquidity": "Read-only",
-    "lenderBalance": "Read-only",
-    "getLoan": "Read-only",
-    "isBanned": "Read-only",
-    "deposit": "Lender",
-    "withdraw": "Lender",
-    "openLoan": "Owner",
-    "repay": "Borrower",
-    "checkDefaultAndBan": "Owner",
-    "unban": "Owner",
-}
-
-MCP_BRIDGE_SESSION_KEY = "mcp_cctp_bridge_state"
-MCP_ARC_TRANSFER_SESSION_KEY = "mcp_arc_transfer_state"
-
-MCP_POLYGON_COMMAND_KEY = "mcp_polygon_wallet_command"
-MCP_POLYGON_COMMAND_SEQ_KEY = "mcp_polygon_wallet_command_seq"
-MCP_POLYGON_COMMAND_ARGS_KEY = "mcp_polygon_wallet_command_args"
-MCP_POLYGON_LOGS_KEY = "mcp_polygon_wallet_logs"
-MCP_POLYGON_PENDING_TX_KEY = "mcp_polygon_pending_tx_request"
-MCP_POLYGON_WALLET_STATE_KEY = "mcp_polygon_wallet_state"
-MCP_POLYGON_AUTO_SWITCH_KEY = "mcp_polygon_auto_switch_attempted"
-MCP_POLYGON_STATUS_KEY = "mcp_polygon_status_message"
-MCP_POLYGON_COMPLETE_KEY = "mcp_polygon_completion_state"
-
-ATTESTATION_POLL_INTERVAL = 5
-ATTESTATION_TIMEOUT = 600
-ATTESTATION_INITIAL_TIMEOUT = 30
+METAMASK_LOGGER = get_metamask_logger()
 
 
-def _resolve_polygon_address(
-    role_addresses: Dict[str, str], connected_address: Optional[str]
-) -> Optional[str]:
+def _resolve_polygon_address(role_addresses: Dict[str, str], connected_address: Optional[str]) -> Optional[str]:
     if connected_address:
         return connected_address
     for role in ("Borrower", "Lender", "Owner"):
@@ -121,9 +123,7 @@ def _normalise_chain_id(value: Any) -> Optional[int]:
     return None
 
 
-def _log_polygon_event(
-    message: str, logs: list[str], *, level: str = "info"
-) -> list[str]:
+def _log_polygon_event(message: str, logs: list[str], *, level: str = "info") -> list[str]:
     text = str(message)
     log_method = getattr(polygon_logger, level, polygon_logger.info)
     log_method(text)
@@ -132,33 +132,24 @@ def _log_polygon_event(
     return updated
 
 
-def _resolve_lending_pool_abi_path() -> (
-    tuple[Optional[str], Optional[str], Optional[str]]
-):
+def _resolve_lending_pool_abi_path() -> tuple[Optional[str], Optional[str], Optional[str]]:
     env_value = os.getenv(LENDING_POOL_ABI_PATH_ENV)
-    if env_value:
-        candidate = os.path.expanduser(env_value)
-        if os.path.exists(candidate):
-            return candidate, LENDING_POOL_ABI_PATH_ENV, None
-        return None, None, candidate
-    guessed = guess_default_lending_pool_abi_path()
-    if guessed:
-        return guessed, "foundry artifact", None
-    return None, None, None
+    resolved_path, source, invalid_path = resolve_lending_pool_abi_path(env_value)
+    if invalid_path:
+        return None, None, invalid_path
+    if resolved_path and source == "env":
+        return resolved_path, LENDING_POOL_ABI_PATH_ENV, None
+    return resolved_path, source, None
 
 
-def _render_cctp_bridge_section(
-    role_addresses: Dict[str, str], wallet_info: Optional[Dict[str, Any]]
-) -> None:
+def _render_cctp_bridge_section(role_addresses: Dict[str, str], wallet_info: Optional[Dict[str, Any]]) -> None:
     st.divider()
     st.subheader("Owner USDC Tools")
     st.caption(
         "Send USDC from the lending pool owner wallet on ARC or initiate a Circle CCTP bridge to a different chain."
     )
 
-    connected_address = (
-        wallet_info.get("address") if isinstance(wallet_info, dict) else None
-    )
+    connected_address = wallet_info.get("address") if isinstance(wallet_info, dict) else None
     default_polygon = _resolve_polygon_address(role_addresses, connected_address)
     default_arc_recipient = connected_address or role_addresses.get("Owner") or ""
 
@@ -190,10 +181,7 @@ def _render_cctp_bridge_section(
         )
 
     if missing_envs:
-        st.error(
-            "Configure the following settings before continuing: "
-            + ", ".join(missing_envs)
-        )
+        st.error("Configure the following settings before continuing: " + ", ".join(missing_envs))
         return
 
     gas_limit: Optional[int] = None
@@ -202,9 +190,7 @@ def _render_cctp_bridge_section(
         try:
             gas_limit = int(gas_limit_raw, 0)
         except ValueError:
-            st.warning(
-                f"Unable to parse `{GAS_LIMIT_ENV}` = {gas_limit_raw}; using estimated gas."
-            )
+            st.warning(f"Unable to parse `{GAS_LIMIT_ENV}` = {gas_limit_raw}; using estimated gas.")
 
     gas_price_wei: Optional[int] = None
     gas_price_raw = os.getenv(GAS_PRICE_GWEI_ENV)
@@ -212,9 +198,7 @@ def _render_cctp_bridge_section(
         try:
             gas_price_wei = int(Decimal(gas_price_raw) * Decimal(1_000_000_000))
         except (InvalidOperation, ValueError):
-            st.warning(
-                f"Unable to parse `{GAS_PRICE_GWEI_ENV}` = {gas_price_raw}; using network gas price."
-            )
+            st.warning(f"Unable to parse `{GAS_PRICE_GWEI_ENV}` = {gas_price_raw}; using network gas price.")
 
     polygon_rpc_url = os.getenv(POLYGON_RPC_ENV) or os.getenv("POLYGON_RPC_URL")
     polygon_private_key = os.getenv(POLYGON_PRIVATE_KEY_ENV)
@@ -241,9 +225,7 @@ def _render_cctp_bridge_section(
             st.markdown("**Polygon auto-mint:** disabled (manual mint required)")
 
     st.markdown("### ARC Same-Chain Transfer")
-    transfer_state: Optional[Dict[str, Any]] = st.session_state.get(
-        MCP_ARC_TRANSFER_SESSION_KEY
-    )
+    transfer_state: Optional[Dict[str, Any]] = st.session_state.get(MCP_ARC_TRANSFER_SESSION_KEY)
 
     with st.form("mcp_arc_transfer_form"):
         recipient_input = st.text_input(
@@ -251,9 +233,7 @@ def _render_cctp_bridge_section(
             value=default_arc_recipient,
             key="mcp_arc_transfer_recipient",
         ).strip()
-        amount_input = st.text_input(
-            "Amount to transfer (USDC)", value="0.10", key="mcp_arc_transfer_amount"
-        )
+        amount_input = st.text_input("Amount to transfer (USDC)", value="0.10", key="mcp_arc_transfer_amount")
         submitted_arc = st.form_submit_button("Send USDC on ARC")
 
     if submitted_arc:
@@ -297,14 +277,12 @@ def _render_cctp_bridge_section(
         )
         if st.button("Clear ARC transfer session", key="mcp_clear_arc_transfer"):
             st.session_state.pop(MCP_ARC_TRANSFER_SESSION_KEY, None)
-            st.experimental_rerun()
+            st_rerun()
     else:
         st.info("Submit the form above to transfer USDC between ARC wallets.")
 
     st.markdown("### Circle CCTP Bridge (ARC → Other Chains)")
-    st.caption(
-        "Use this section only for cross-chain transfers from ARC via Circle CCTP."
-    )
+    st.caption("Use this section only for cross-chain transfers from ARC via Circle CCTP.")
 
     polygon_address = st.text_input(
         "Destination Polygon address",
@@ -313,21 +291,15 @@ def _render_cctp_bridge_section(
     ).strip()
 
     if not polygon_address:
-        st.info(
-            "Enter a Polygon address or connect a wallet above to continue with the bridge."
-        )
+        st.info("Enter a Polygon address or connect a wallet above to continue with the bridge.")
         return
 
-    bridge_state: Optional[Dict[str, Any]] = st.session_state.get(
-        MCP_BRIDGE_SESSION_KEY
-    )
+    bridge_state: Optional[Dict[str, Any]] = st.session_state.get(MCP_BRIDGE_SESSION_KEY)
 
     bridge_status_box = st.empty()
 
     with st.form("mcp_cctp_bridge_form"):
-        amount_input = st.text_input(
-            "Amount to bridge (USDC)", value="0.10", key="mcp_cctp_amount"
-        )
+        amount_input = st.text_input("Amount to bridge (USDC)", value="0.10", key="mcp_cctp_amount")
         submitted_bridge = st.form_submit_button("Start ARC → Polygon bridge")
 
     if submitted_bridge:
@@ -365,9 +337,7 @@ def _render_cctp_bridge_section(
             bridge_state = result.to_state()
             st.session_state[MCP_BRIDGE_SESSION_KEY] = bridge_state
             if bridge_state.get("status") == "complete":
-                st.success(
-                    "Circle attestation received. Continue with the Polygon mint step below."
-                )
+                st.success("Circle attestation received. Continue with the Polygon mint step below.")
             else:
                 st.info(
                     "ARC transactions confirmed. Circle attestation is still pending — refresh below once it becomes available."
@@ -391,9 +361,7 @@ def _render_cctp_bridge_section(
 
     bridge_state = st.session_state.get(MCP_BRIDGE_SESSION_KEY)
     if not bridge_state:
-        st.info(
-            "Once the burn transaction completes, this section will prepare the Polygon mint transaction."
-        )
+        st.info("Once the burn transaction completes, this section will prepare the Polygon mint transaction.")
         return
 
     st.markdown("### Step 1 — ARC Transactions")
@@ -410,9 +378,7 @@ def _render_cctp_bridge_section(
         st.markdown(f"- **Allowance approval:** [`{approve_hash}`]({approve_explorer})")
     attestation_url = bridge_state.get("attestation_url")
     if attestation_url:
-        st.markdown(
-            f"- **Circle attestation API:** [{attestation_url}]({attestation_url})"
-        )
+        st.markdown(f"- **Circle attestation API:** [{attestation_url}]({attestation_url})")
 
     status = bridge_state.get("status", "complete")
     attestation_error = bridge_state.get("attestation_error")
@@ -462,14 +428,11 @@ def _render_cctp_bridge_section(
                         st.code("\n".join(refresh_logs), language="text")
             else:
                 st.session_state[MCP_BRIDGE_SESSION_KEY] = resume_result.to_state()
-                st.success(
-                    "Circle attestation is ready. Continue with the Polygon mint below.",
-                    icon="✅",
-                )
+                st.success("Circle attestation is ready. Continue with the Polygon mint below.", icon="✅")
                 if refresh_logs:
                     with st.expander("Bridge log", expanded=False):
                         st.code("\n".join(refresh_logs), language="text")
-                st.experimental_rerun()
+                st_rerun()
         return
 
     auto_mint_hash = bridge_state.get("auto_mint_tx_hash")
@@ -487,16 +450,12 @@ def _render_cctp_bridge_section(
         return
 
     if auto_mint_error:
-        st.warning(
-            f"Automatic Polygon mint failed: {auto_mint_error}. Submit the mint via MetaMask below."
-        )
+        st.warning(f"Automatic Polygon mint failed: {auto_mint_error}. Submit the mint via MetaMask below.")
 
     message_hex = bridge_state.get("message_hex")
     attestation_hex = bridge_state.get("attestation_hex")
     if not message_hex or not attestation_hex:
-        st.error(
-            "Attestation payload missing from bridge state. Refresh the attestation above."
-        )
+        st.error("Attestation payload missing from bridge state. Refresh the attestation above.")
         return
     with st.expander("Message & attestation payload", expanded=False):
         st.code(message_hex, language="text")
@@ -514,8 +473,7 @@ def _render_cctp_bridge_section(
         polygon_logs: list[str] = st.session_state.get(MCP_POLYGON_LOGS_KEY, [])
         wallet_state = st.session_state.get(MCP_POLYGON_WALLET_STATE_KEY, {})
         wallet_chain_id = _normalise_chain_id(
-            (wallet_state or {}).get("chainId")
-            or (wallet_state or {}).get("wallet_chain")
+            (wallet_state or {}).get("chainId") or (wallet_state or {}).get("wallet_chain")
         )
         chain_ready = wallet_chain_id == POLYGON_AMOY_CHAIN_ID
         auto_switch_attempted = bool(st.session_state.get(MCP_POLYGON_AUTO_SWITCH_KEY))
@@ -529,29 +487,11 @@ def _render_cctp_bridge_section(
                     "message": "Wallet connected to Polygon PoS Amoy. Ready to submit the mint.",
                 }
         else:
-            if not auto_switch_attempted and current_command is None:
-                polygon_logs = _log_polygon_event(
-                    "⚠ Auto-requesting MetaMask network switch to Polygon PoS Amoy…",
-                    polygon_logs,
-                    level="warning",
-                )
-                next_seq = st.session_state.get(MCP_POLYGON_COMMAND_SEQ_KEY, 0) + 1
-                st.session_state[MCP_POLYGON_COMMAND_SEQ_KEY] = next_seq
-                st.session_state[MCP_POLYGON_COMMAND_KEY] = "switch_network"
-                st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = {
-                    "require_chain_id": POLYGON_AMOY_CHAIN_ID
-                }
-                st.session_state[MCP_POLYGON_AUTO_SWITCH_KEY] = True
-                st.session_state[MCP_POLYGON_STATUS_KEY] = {
-                    "level": "warning",
-                    "message": "MetaMask network switch requested automatically. Approve the Polygon PoS Amoy switch to continue.",
-                }
-                current_command = "switch_network"
+            if not auto_switch_attempted:
+                st.session_state[MCP_POLYGON_AUTO_SWITCH_KEY] = False
 
         if not chain_ready:
-            st.session_state.setdefault(
-                MCP_POLYGON_AUTO_SWITCH_KEY, auto_switch_attempted
-            )
+            st.session_state.setdefault(MCP_POLYGON_AUTO_SWITCH_KEY, auto_switch_attempted)
 
         col_submit, col_clear = st.columns([3, 1])
         status_state = st.session_state.get(MCP_POLYGON_STATUS_KEY)
@@ -591,9 +531,7 @@ def _render_cctp_bridge_section(
                 st.session_state.pop(MCP_POLYGON_STATUS_KEY, None)
                 st.session_state.pop(MCP_POLYGON_COMPLETE_KEY, None)
                 if chain_ready:
-                    polygon_logs = _log_polygon_event(
-                        "→ requesting MetaMask signature…", polygon_logs
-                    )
+                    polygon_logs = _log_polygon_event("→ requesting MetaMask signature…", polygon_logs)
                     st.session_state[MCP_POLYGON_PENDING_TX_KEY] = None
                     st.session_state[MCP_POLYGON_COMMAND_KEY] = "send_transaction"
                     st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = {
@@ -604,11 +542,11 @@ def _render_cctp_bridge_section(
                         "level": "info",
                         "message": "Waiting for MetaMask to confirm the Polygon mint transaction…",
                     }
+                    st.session_state[MCP_POLYGON_COMMAND_REASON_KEY] = "user submitted mint transaction."
+                    st.session_state[MCP_POLYGON_COMMAND_LOGGED_KEY] = False
                 else:
                     polygon_logs = _log_polygon_event(
-                        "⚠ Requesting MetaMask network switch to Polygon PoS Amoy…",
-                        polygon_logs,
-                        level="warning",
+                        "⚠ Requesting MetaMask network switch to Polygon PoS Amoy…", polygon_logs, level="warning"
                     )
                     st.session_state[MCP_POLYGON_PENDING_TX_KEY] = tx_request
                     st.session_state[MCP_POLYGON_COMMAND_KEY] = "switch_network"
@@ -619,6 +557,10 @@ def _render_cctp_bridge_section(
                         "level": "warning",
                         "message": "MetaMask network switch requested. Approve the Polygon PoS Amoy switch to continue.",
                     }
+                    st.session_state[MCP_POLYGON_COMMAND_REASON_KEY] = (
+                        f"user attempted mint while wallet on chain {wallet_chain_id}; needs {POLYGON_AMOY_CHAIN_ID}"
+                    )
+                    st.session_state[MCP_POLYGON_COMMAND_LOGGED_KEY] = False
                 st.session_state[MCP_POLYGON_LOGS_KEY] = polygon_logs
         with col_clear:
             if st.button("Clear Polygon log", key="mcp_clear_polygon_log"):
@@ -630,6 +572,17 @@ def _render_cctp_bridge_section(
         command = st.session_state.get(MCP_POLYGON_COMMAND_KEY)
         command_sequence = st.session_state.get(MCP_POLYGON_COMMAND_SEQ_KEY)
         command_args = st.session_state.get(MCP_POLYGON_COMMAND_ARGS_KEY) or {}
+        command_reason = st.session_state.get(MCP_POLYGON_COMMAND_REASON_KEY)
+        command_logged = bool(st.session_state.get(MCP_POLYGON_COMMAND_LOGGED_KEY))
+
+        if command and not command_logged:
+            reason_text = command_reason or "MetaMask command pending (restored state)."
+            METAMASK_LOGGER.info(
+                "MetaMask popup (%s) for Polygon mint helper. Reason: %s.",
+                command,
+                reason_text,
+            )
+            st.session_state[MCP_POLYGON_COMMAND_LOGGED_KEY] = True
 
         component_payload = wallet_command(
             key="mcp_polygon_cctp_receive_headless",
@@ -646,18 +599,19 @@ def _render_cctp_bridge_section(
         if component_payload is not None:
             polygon_logger.info("MetaMask payload: %s", component_payload)
 
+        payload_command = None
         if isinstance(component_payload, dict):
             st.session_state[MCP_POLYGON_WALLET_STATE_KEY] = component_payload
             payload_chain_id = _normalise_chain_id(component_payload.get("chainId"))
             if payload_chain_id is not None:
                 wallet_chain_id = payload_chain_id
                 chain_ready = wallet_chain_id == POLYGON_AMOY_CHAIN_ID
-            if command == "switch_network" and chain_ready:
+            payload_command = str(component_payload.get("command") or "").lower()
+            if payload_command == "switch_network" and chain_ready:
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "info",
                     "message": "MetaMask switched to Polygon PoS Amoy. Confirm the mint prompt.",
                 }
-            payload_command = str(component_payload.get("command") or "").lower()
             payload_status = str(component_payload.get("status") or "").lower()
             payload_warning = component_payload.get("warning")
             payload_error = component_payload.get("error")
@@ -684,20 +638,22 @@ def _render_cctp_bridge_section(
                         "explorer": explorer_url,
                         "message": f"Polygon mint transaction sent: `{payload_tx_hash}`.",
                     }
-                elif payload_status == "switched":
+                elif payload_status == "switched" and command == "switch_network":
                     st.session_state[MCP_POLYGON_STATUS_KEY] = {
                         "level": "info",
                         "message": "MetaMask reports the wallet switched networks. Preparing mint request…",
                     }
                     pending_tx = st.session_state.get(MCP_POLYGON_PENDING_TX_KEY)
+                    if not pending_tx:
+                        pending_tx = tx_request
+                        if pending_tx:
+                            st.session_state[MCP_POLYGON_PENDING_TX_KEY] = pending_tx
                     if pending_tx:
                         polygon_logs = _log_polygon_event(
                             "MetaMask confirmed network switch. Sending Polygon mint transaction request…",
                             polygon_logs,
                         )
-                        next_seq = (
-                            st.session_state.get(MCP_POLYGON_COMMAND_SEQ_KEY, 0) + 1
-                        )
+                        next_seq = st.session_state.get(MCP_POLYGON_COMMAND_SEQ_KEY, 0) + 1
                         st.session_state[MCP_POLYGON_COMMAND_SEQ_KEY] = next_seq
                         st.session_state[MCP_POLYGON_COMMAND_KEY] = "send_transaction"
                         st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = {
@@ -708,7 +664,11 @@ def _render_cctp_bridge_section(
                             "level": "info",
                             "message": "MetaMask switch complete. Awaiting mint confirmation…",
                         }
-                        st.experimental_rerun()
+                        st.session_state[MCP_POLYGON_COMMAND_REASON_KEY] = (
+                            "network switch completed; resuming pending mint transaction"
+                        )
+                        st.session_state[MCP_POLYGON_COMMAND_LOGGED_KEY] = False
+                        st_rerun()
                     else:
                         polygon_logs = _log_polygon_event(
                             "MetaMask confirmed network switch. Click 'Submit mint via MetaMask' to continue.",
@@ -744,9 +704,7 @@ def _render_cctp_bridge_section(
             "and confirm the prompt."
         )
         if chain_ready:
-            status_box.success(
-                "Wallet connected to Polygon PoS Amoy. Ready to submit the mint."
-            )
+            status_box.success("Wallet connected to Polygon PoS Amoy. Ready to submit the mint.")
         elif wallet_chain_id is not None:
             status_box.warning(
                 f"Wallet is currently on chain {wallet_chain_id} (0x{wallet_chain_id:x}). "
@@ -755,14 +713,10 @@ def _render_cctp_bridge_section(
         else:
             status_box.info(base_message)
 
-        if command == "send_transaction" and isinstance(component_payload, dict):
-            if component_payload.get("status") == "sent" and component_payload.get(
-                "txHash"
-            ):
+        if payload_command == "send_transaction":
+            if component_payload.get("status") == "sent" and component_payload.get("txHash"):
                 mint_hash = component_payload["txHash"]
-                polygon_logs = _log_polygon_event(
-                    f"✔ mint transaction sent: {mint_hash}", polygon_logs
-                )
+                polygon_logs = _log_polygon_event(f"✔ mint transaction sent: {mint_hash}", polygon_logs)
                 status_box.success("Polygon mint transaction submitted.", icon="✅")
                 st.success(f"Mint transaction sent: `{mint_hash}`", icon="✅")
                 explorer_url = polygon_explorer_url(mint_hash)
@@ -770,9 +724,7 @@ def _render_cctp_bridge_section(
                     f"[View on Polygonscan]({explorer_url})",
                     help="Opens the Polygon PoS Amoy transaction in a new tab.",
                 )
-                st.toast(
-                    "Polygon mint transaction sent. View it on Polygonscan.", icon="✅"
-                )
+                st.toast("Polygon mint transaction sent. View it on Polygonscan.", icon="✅")
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "success",
                     "message": f"Polygon mint transaction sent: `{mint_hash}`.",
@@ -786,11 +738,11 @@ def _render_cctp_bridge_section(
                 st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
                 st.session_state[MCP_POLYGON_PENDING_TX_KEY] = None
                 st.session_state.pop(MCP_POLYGON_AUTO_SWITCH_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
             elif component_payload.get("error"):
                 error_msg = str(component_payload["error"])
-                polygon_logs = _log_polygon_event(
-                    f"✖ error: {error_msg}", polygon_logs, level="error"
-                )
+                polygon_logs = _log_polygon_event(f"✖ error: {error_msg}", polygon_logs, level="error")
                 status_box.error(error_msg)
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "error",
@@ -798,11 +750,11 @@ def _render_cctp_bridge_section(
                 }
                 st.session_state[MCP_POLYGON_COMMAND_KEY] = None
                 st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
+                st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
             elif component_payload.get("warning"):
                 warning_msg = str(component_payload["warning"])
-                polygon_logs = _log_polygon_event(
-                    f"! warning: {warning_msg}", polygon_logs, level="warning"
-                )
+                polygon_logs = _log_polygon_event(f"! warning: {warning_msg}", polygon_logs, level="warning")
                 status_box.warning(warning_msg)
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "warning",
@@ -810,24 +762,26 @@ def _render_cctp_bridge_section(
                 }
                 st.session_state[MCP_POLYGON_COMMAND_KEY] = None
                 st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
+                st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
             else:
-                polygon_logs = _log_polygon_event(
-                    f"(info) payload: {component_payload}", polygon_logs
-                )
+                polygon_logs = _log_polygon_event(f"(info) payload: {component_payload}", polygon_logs)
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "info",
                     "message": "Polygon mint request submitted to MetaMask.",
                 }
                 st.session_state[MCP_POLYGON_COMMAND_KEY] = None
                 st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
-        elif command == "switch_network" and isinstance(component_payload, dict):
+                st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
+        elif command == "switch_network" and payload_command == "switch_network":
             if component_payload.get("error"):
                 error_msg = str(component_payload["error"])
-                polygon_logs = _log_polygon_event(
-                    f"✖ network switch error: {error_msg}", polygon_logs, level="error"
-                )
+                polygon_logs = _log_polygon_event(f"✖ network switch error: {error_msg}", polygon_logs, level="error")
                 st.session_state[MCP_POLYGON_COMMAND_KEY] = None
                 st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
+                st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
                 st.session_state.pop(MCP_POLYGON_AUTO_SWITCH_KEY, None)
                 st.session_state[MCP_POLYGON_STATUS_KEY] = {
                     "level": "error",
@@ -835,8 +789,7 @@ def _render_cctp_bridge_section(
                 }
             elif chain_ready:
                 polygon_logs = _log_polygon_event(
-                    "✔ Wallet switched to Polygon PoS Amoy. Requesting mint signature…",
-                    polygon_logs,
+                    "✔ Wallet switched to Polygon PoS Amoy. Requesting mint signature…", polygon_logs
                 )
                 pending_tx = st.session_state.get(MCP_POLYGON_PENDING_TX_KEY)
                 if pending_tx:
@@ -847,23 +800,22 @@ def _render_cctp_bridge_section(
                         "tx_request": pending_tx,
                         "action": "eth_sendTransaction",
                     }
-                    st.session_state[MCP_POLYGON_PENDING_TX_KEY] = None
-                    st.toast(
-                        "MetaMask switched to Polygon PoS Amoy. Confirm the mint.",
-                        icon="ℹ️",
-                    )
+                    st.toast("MetaMask switched to Polygon PoS Amoy. Confirm the mint.", icon="ℹ️")
                     st.session_state[MCP_POLYGON_STATUS_KEY] = {
                         "level": "info",
                         "message": "MetaMask switched to Polygon PoS Amoy. When prompted, confirm the mint transaction.",
                     }
-                    st.experimental_rerun()
+                    st.session_state[MCP_POLYGON_COMMAND_REASON_KEY] = (
+                        "auto-switch succeeded; dispatching pending mint transaction"
+                    )
+                    st.session_state[MCP_POLYGON_COMMAND_LOGGED_KEY] = False
+                    st_rerun()
                 else:
                     st.session_state[MCP_POLYGON_COMMAND_KEY] = None
                     st.session_state[MCP_POLYGON_COMMAND_ARGS_KEY] = None
-                    st.toast(
-                        "Wallet switched to Polygon PoS Amoy. Submit the mint when ready.",
-                        icon="ℹ️",
-                    )
+                    st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+                    st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
+                    st.toast("Wallet switched to Polygon PoS Amoy. Submit the mint when ready.", icon="ℹ️")
                     st.session_state[MCP_POLYGON_STATUS_KEY] = {
                         "level": "info",
                         "message": "Wallet switched to Polygon PoS Amoy. Submit the mint when ready.",
@@ -874,13 +826,9 @@ def _render_cctp_bridge_section(
             with st.expander("Polygon wallet log", expanded=True):
                 st.code("\n".join(polygon_logs), language="text")
         else:
-            st.info(
-                "No Polygon wallet events yet. Click the button above to send the transaction."
-            )
+            st.info("No Polygon wallet events yet. Click the button above to send the transaction.")
 
-    st.caption(
-        "You will need test MATIC on Polygon Amoy to submit the mint transaction."
-    )
+    st.caption("You will need test MATIC on Polygon Amoy to submit the mint transaction.")
 
     if st.button("Clear bridge session", key="mcp_clear_cctp_session"):
         st.session_state.pop(MCP_BRIDGE_SESSION_KEY, None)
@@ -890,10 +838,282 @@ def _render_cctp_bridge_section(
         st.session_state.pop(MCP_POLYGON_PENDING_TX_KEY, None)
         st.session_state.pop(MCP_POLYGON_COMMAND_KEY, None)
         st.session_state.pop(MCP_POLYGON_COMMAND_ARGS_KEY, None)
+        st.session_state.pop(MCP_POLYGON_COMMAND_REASON_KEY, None)
+        st.session_state.pop(MCP_POLYGON_COMMAND_LOGGED_KEY, None)
         st.session_state.pop(MCP_POLYGON_AUTO_SWITCH_KEY, None)
         st.session_state.pop(MCP_POLYGON_WALLET_STATE_KEY, None)
-        st.experimental_rerun()
+        st_rerun()
 
+
+def _render_verification_section() -> None:
+    """Render the verification input section with form and results display."""
+    st.divider()
+    st.subheader("🔍 User Verification")
+    st.caption("Enter user information to run through the complete verification flow.")
+    
+    # Session state key for storing verification results
+    verification_results_key = "verification_results"
+    
+    # Get chain_id for wallet connection (same as used in role assignment)
+    rpc_url = os.getenv(ARC_RPC_ENV)
+    w3 = get_web3_client(rpc_url)
+    chain_id = None
+    try:
+        chain_id = w3.eth.chain_id if w3 else None
+    except Exception:
+        chain_id = None
+    
+    # Connect to MetaMask wallet
+    wallet_info = connect_wallet(
+        key="verification_wallet",
+        require_chain_id=chain_id,
+        autoconnect=True,
+    )
+    
+    wallet_address = wallet_info.get("address") if isinstance(wallet_info, dict) else None
+    
+    # Show wallet connection status
+    if wallet_address:
+        st.info(f"✅ Connected wallet: `{wallet_address}`")
+    else:
+        st.warning("⚠️ Please connect your MetaMask wallet to proceed with verification.")
+    
+    # Form for user input
+    with st.form("verification_form", clear_on_submit=False):
+        st.markdown("### User Information")
+        
+        if wallet_address:
+            st.markdown(f"**Wallet Address:** `{wallet_address}`")
+        else:
+            st.error("❌ No wallet connected. Connect MetaMask to continue.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            full_name = st.text_input(
+                "Full Name",
+                value="",
+                help="Optional: User's full name (contributes to score)",
+                key="verification_full_name"
+            ).strip()
+            
+            email = st.text_input(
+                "Email",
+                value="",
+                help="Optional: Email address",
+                key="verification_email"
+            ).strip()
+        
+        with col2:
+            phone = st.text_input(
+                "Phone",
+                value="",
+                help="Optional: Phone number",
+                key="verification_phone"
+            ).strip()
+            
+            social_link = st.text_input(
+                "Social Link",
+                value="",
+                help="Optional: GitHub, LinkedIn, or other social profile URL",
+                key="verification_social_link"
+            ).strip()
+        
+        uploaded_files = st.file_uploader(
+            "Upload Files",
+            type=["pdf", "png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+            help="Optional: Upload documents (PDF, PNG, JPEG) - files must be > 20 KB",
+            key="verification_uploaded_files"
+        )
+        
+        submitted = st.form_submit_button("Run Verification", type="primary", disabled=not wallet_address)
+    
+    # Handle form submission
+    if submitted:
+        if not wallet_address:
+            st.error("❌ Wallet address is required. Please connect your MetaMask wallet first.")
+            return
+        
+        # Prepare user data
+        user_data = {
+            "wallet_address": wallet_address,
+            "full_name": full_name if full_name else None,
+            "email": email if email else None,
+            "phone": phone if phone else None,
+            "social_link": social_link if social_link else None,
+            "uploaded_files": list(uploaded_files) if uploaded_files else None,
+        }
+        
+        # Run verification flow
+        with st.spinner("🔄 Running verification flow... This may take a moment."):
+            try:
+                results = asyncio.run(run_verification_flow(user_data))
+                st.session_state[verification_results_key] = results
+            except Exception as e:
+                st.error(f"❌ Verification failed: {str(e)}")
+                st.session_state[verification_results_key] = {
+                    "errors": [f"Verification error: {str(e)}"]
+                }
+    
+    # Display results if available
+    results = st.session_state.get(verification_results_key)
+    if results:
+        st.divider()
+        st.markdown("### Verification Results")
+        
+        # Display errors if any
+        if results.get("errors"):
+            st.error("❌ Errors occurred during verification:")
+            for error in results["errors"]:
+                st.error(f"  • {error}")
+        
+        # Wallet Verification Results
+        wallet_verification = results.get("wallet_verification")
+        if wallet_verification:
+            with st.expander("🔍 Wallet Verification", expanded=True):
+                if wallet_verification.get("valid_format"):
+                    st.success("✅ Wallet format is valid")
+                else:
+                    st.error(f"❌ Invalid wallet format: {wallet_verification.get('reason', 'Unknown error')}")
+                
+                if wallet_verification.get("active_onchain"):
+                    st.success("✅ Wallet has on-chain activity")
+                else:
+                    st.warning(f"⚠️ No on-chain activity: {wallet_verification.get('reason', 'Unknown')}")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(wallet_verification)
+        
+        # On-chain Verification Results
+        onchain_verification = results.get("onchain_verification")
+        if onchain_verification:
+            with st.expander("⛓️ On-chain Verification", expanded=True):
+                # Calculate on-chain score from wallet summary
+                onchain_score = wallet_summary_to_score(onchain_verification)
+                
+                # Display on-chain score prominently
+                st.metric("On-chain Trust Score", f"{onchain_score:.2f}/100")
+                
+                st.divider()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Transactions", onchain_verification.get("tx_count", 0))
+                
+                with col2:
+                    st.metric(
+                        "Value Moved (ETH)",
+                        f"{onchain_verification.get('total_value_moved', 0):.4f}"
+                    )
+                
+                with col3:
+                    st.metric(
+                        "Unique Interactions",
+                        onchain_verification.get("unique_interactions", 0)
+                    )
+                
+                with col4:
+                    st.metric(
+                        "Wallet Age (days)",
+                        f"{onchain_verification.get('wallet_age_days', 0):.1f}"
+                    )
+                
+                # Liquidation information
+                liquidations = onchain_verification.get("liquidations", {})
+                if liquidations.get("count", 0) > 0:
+                    st.warning(
+                        f"⚠️ {liquidations.get('count')} liquidation(s) detected. "
+                        f"Total amount: ${liquidations.get('totalAmountUSD', 0):.2f}"
+                    )
+                else:
+                    st.success("✅ No liquidations detected")
+                
+                with st.expander("Detailed On-chain Data", expanded=False):
+                    st.json(onchain_verification)
+        
+        # Off-chain Verification Results
+        offchain_verification = results.get("offchain_verification")
+        if offchain_verification:
+            with st.expander("📋 Off-chain Verification", expanded=True):
+                total_offchain = offchain_verification.get("total_offchain_score", 0)
+                st.metric("Off-chain Score", f"{total_offchain}/100")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Component Scores:**")
+                    st.write(f"• Document Upload: {offchain_verification.get('document_upload_score', 0)}/20")
+                    st.write(f"• Email Quality: {offchain_verification.get('email_quality_score', 0)}/40")
+                    st.write(f"• Phone Format: {offchain_verification.get('phone_format_score', 0)}/20")
+                
+                with col2:
+                    st.write("**Additional Scores:**")
+                    st.write(f"• Real Name: {offchain_verification.get('real_name_score', 0)}/10")
+                    st.write(f"• Social Link: {offchain_verification.get('social_link_score', 0)}/10")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(offchain_verification)
+        
+        # Score Calculation Results
+        score_calculation = results.get("score_calculation")
+        if score_calculation:
+            with st.expander("📊 Score Calculation", expanded=True):
+                final_score = score_calculation.get("final_score", 0)
+                on_chain_score = score_calculation.get("on_chain_score", 0)
+                off_chain_score = score_calculation.get("off_chain_score", 0)
+                
+                # Display final score prominently
+                st.metric("Final Trust Score", f"{final_score}/100")
+                
+                # Score breakdown
+                st.write("**Score Breakdown:**")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"• On-chain Score: {on_chain_score}/100")
+                    st.write(f"• Off-chain Score: {off_chain_score}/100")
+                
+                with col2:
+                    # Calculate weighted values for display (85% on-chain, 15% off-chain)
+                    weighted_onchain = on_chain_score * 0.85
+                    weighted_offchain = off_chain_score * 0.15
+                    st.write(f"• Weighted On-chain (85%): {weighted_onchain:.2f}")
+                    st.write(f"• Weighted Off-chain (15%): {weighted_offchain:.2f}")
+                
+                with st.expander("Detailed Score Data", expanded=False):
+                    st.json(score_calculation)
+        
+        # Eligibility Check Results
+        eligibility_check = results.get("eligibility_check")
+        if eligibility_check:
+            with st.expander("✅ Eligibility Check", expanded=True):
+                is_eligible = eligibility_check.get("eligible", False)
+                
+                if is_eligible:
+                    st.success("✅ User is ELIGIBLE for credit")
+                    amount_usdc = eligibility_check.get("amount_usdc", 0)
+                    st.metric("Eligible Loan Amount", f"${amount_usdc:,} USDC")
+                else:
+                    st.error("❌ User is NOT ELIGIBLE for credit")
+                
+                st.write(f"**Reason:** {eligibility_check.get('reason', 'N/A')}")
+                
+                # Display factors applied
+                factors_applied = eligibility_check.get("factors_applied", [])
+                if factors_applied:
+                    st.write("**Factors Applied:**")
+                    for factor in factors_applied:
+                        st.write(f"• {factor}")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(eligibility_check)
+        
+        # Clear results button
+        if st.button("Clear Results", key="clear_verification_results"):
+            st.session_state.pop(verification_results_key, None)
+            st_rerun()
 
 def render_mcp_tools_page() -> None:
     st.title("🧪 Direct MCP Tool Tester")
@@ -925,18 +1145,29 @@ def render_mcp_tools_page() -> None:
     role_addresses.setdefault("Lender", "")
     role_addresses.setdefault("Borrower", "")
 
+    # Wallet widget for role assignment
+    st.markdown("**Connect your wallet to assign it to a role:**")
+    
     wallet_info = connect_wallet(
         key="role_assignment_wallet",
         require_chain_id=chain_id,
-        preferred_address=role_addresses.get("Owner")
+        preferred_address=
+        role_addresses.get("Owner")
         or role_addresses.get("Lender")
         or role_addresses.get("Borrower"),
         autoconnect=True,
     )
 
-    current_address = (
-        wallet_info.get("address") if isinstance(wallet_info, dict) else None
-    )
+    wallet_error = None
+    wallet_warning = None
+    wallet_status = None
+    current_address = None
+    if isinstance(wallet_info, dict):
+        current_address = wallet_info.get("address")
+        wallet_error = wallet_info.get("error")
+        wallet_warning = wallet_info.get("warning")
+        wallet_status = wallet_info.get("status")
+
     assignment_col, info_col = st.columns([2, 1])
 
     with assignment_col:
@@ -946,17 +1177,26 @@ def render_mcp_tools_page() -> None:
             key="role_assignment_choice",
         )
         if current_address:
-            st.info(f"Connected wallet: {current_address}")
+            st.success(f"✅ Connected: {current_address[:6]}...{current_address[-4:]}")
             if st.button("Assign to role", key="assign_role_button"):
                 role_addresses[role_choice] = current_address
                 st.session_state[roles_key] = role_addresses
                 st.toast(f"Assigned {current_address} to {role_choice}", icon="✅")
+        elif wallet_error:
+            st.error(f"MetaMask error: {wallet_error}")
+        elif wallet_warning:
+            st.warning(f"MetaMask warning: {wallet_warning}")
+        elif wallet_status:
+            st.info(f"MetaMask status: {wallet_status}")
         else:
-            st.warning("Connect MetaMask to assign addresses to roles.")
+            st.info("Use the wallet widget above to connect MetaMask, then assign your role.")
 
     with info_col:
         st.caption("Stored role addresses")
         st.json(role_addresses)
+
+    # User Verification Section
+    _render_verification_section()
 
     owner_pk = os.getenv(PRIVATE_KEY_ENV)
     lender_pk = os.getenv("LENDER_PRIVATE_KEY")
@@ -974,15 +1214,11 @@ def render_mcp_tools_page() -> None:
         pk_value = role_private_keys.get(role_name)
         addr = role_addresses.get(role_name)
         if pk_value:
-            st.caption(
-                f"{role_name}: env private key configured for automatic signing."
-            )
+            st.caption(f"{role_name}: env private key configured for automatic signing.")
         elif addr:
             st.caption(f"{role_name}: MetaMask wallet {addr} will sign when required.")
         else:
-            st.caption(
-                f"{role_name}: no signer configured yet; assign a MetaMask wallet above."
-            )
+            st.caption(f"{role_name}: no signer configured yet; assign a MetaMask wallet above.")
 
     st.divider()
     st.subheader("TrustMint SBT Tools")
@@ -994,12 +1230,11 @@ def render_mcp_tools_page() -> None:
 
     sbt_tools_schema = []
     sbt_function_map = {}
+    sbt_guard = None
     if sbt_address and sbt_abi_path and w3 is not None:
         sbt_abi = load_contract_abi(sbt_abi_path)
         try:
-            sbt_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(sbt_address), abi=sbt_abi
-            )
+            sbt_contract = w3.eth.contract(address=Web3.to_checksum_address(sbt_address), abi=sbt_abi)
             sbt_tools_schema, sbt_function_map = build_llm_toolkit(
                 w3=w3,
                 contract=sbt_contract,
@@ -1008,6 +1243,7 @@ def render_mcp_tools_page() -> None:
                 default_gas_limit=default_gas_limit,
                 gas_price_gwei=gas_price_gwei,
             )
+            sbt_guard = build_sbt_guard(w3, sbt_contract)
         except Exception as exc:
             st.warning(f"Unable to build SBT toolkit: {exc}")
 
@@ -1023,7 +1259,7 @@ def render_mcp_tools_page() -> None:
             key_prefix="sbt",
             role_private_keys=role_private_keys,
             role_addresses=role_addresses,
-            tool_role_map=_SBT_TOOL_ROLES,
+            tool_role_map=SBT_TOOL_ROLES,
         )
 
     st.divider()
@@ -1041,9 +1277,7 @@ def render_mcp_tools_page() -> None:
         pool_abi = load_contract_abi(pool_abi_path)
         usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
         try:
-            pool_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(pool_address), abi=pool_abi
-            )
+            pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
             pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
                 w3=w3,
                 pool_contract=pool_contract,
@@ -1054,6 +1288,7 @@ def render_mcp_tools_page() -> None:
                 gas_price_gwei=gas_price_gwei,
                 role_addresses=role_addresses,
                 role_private_keys=role_private_keys,
+                borrower_guard=sbt_guard,
             )
         except Exception as exc:
             st.warning(f"Unable to build LendingPool toolkit: {exc}")
@@ -1076,7 +1311,7 @@ def render_mcp_tools_page() -> None:
             parameter_defaults=parameter_defaults,
             role_private_keys=role_private_keys,
             role_addresses=role_addresses,
-            tool_role_map=_POOL_TOOL_ROLES,
+            tool_role_map=POOL_TOOL_ROLES,
         )
 
     _render_cctp_bridge_section(role_addresses, wallet_info)

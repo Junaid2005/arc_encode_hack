@@ -7,7 +7,6 @@ annotated-types==0.7.0
 anyio==4.11.0
 attrs==25.4.0
 bitarray==3.7.2
-black==25.11.0
 blinker==1.9.0
 cachetools==6.2.1
 certifi==2025.10.5
@@ -41,16 +40,13 @@ jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 MarkupSafe==3.0.3
 multidict==6.7.0
-mypy_extensions==1.1.0
 narwhals==2.10.0
 numpy==2.3.4
 openai==2.6.1
 packaging==25.0
 pandas==2.3.3
 parsimonious==0.10.0
-pathspec==0.12.1
 pillow==12.0.0
-platformdirs==4.5.0
 propcache==0.4.1
 protobuf==6.33.0
 pyarrow==21.0.0
@@ -61,7 +57,6 @@ pydantic_core==2.41.5
 pydeck==0.9.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
-pytokens==0.3.0
 pytz==2025.2
 pyunormalize==17.0.0
 referencing==0.37.0

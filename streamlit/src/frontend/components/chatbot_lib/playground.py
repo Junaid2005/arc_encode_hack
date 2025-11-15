@@ -35,9 +35,7 @@ def render_mcp_llm_playground_section() -> None:
 
     deployment = os.getenv(AZURE_DEPLOYMENT_ENV)
     if not deployment:
-        st.warning(
-            "Set `AZURE_OPENAI_CHAT_DEPLOYMENT` in `.env` to enable Azure OpenAI chat completions."
-        )
+        st.warning("Set `AZURE_OPENAI_CHAT_DEPLOYMENT` in `.env` to enable Azure OpenAI chat completions.")
         return
 
     rpc_url = os.getenv(ARC_RPC_ENV)
@@ -52,20 +50,14 @@ def render_mcp_llm_playground_section() -> None:
     abi = load_contract_abi(abi_path)
 
     if w3 is None:
-        st.info(
-            "Connect to the RPC and provide TrustMintSBT details to unlock the MCP playground."
-        )
+        st.info("Connect to the RPC and provide TrustMintSBT details to unlock the MCP playground.")
         return
     if not abi or not contract_address:
-        st.info(
-            "Set `SBT_ADDRESS` and `TRUSTMINT_SBT_ABI_PATH` in `.env` to unlock the MCP playground."
-        )
+        st.info("Set `SBT_ADDRESS` and `TRUSTMINT_SBT_ABI_PATH` in `.env` to unlock the MCP playground.")
         return
 
     try:
-        contract = w3.eth.contract(
-            address=Web3.to_checksum_address(contract_address), abi=abi
-        )
+        contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
     except Exception as exc:
         st.error(f"Unable to build contract instance: {exc}")
         return
@@ -107,10 +99,6 @@ def render_mcp_llm_playground_section() -> None:
             from streamlit_lottie import st_lottie_spinner
 
             with st_lottie_spinner(waves, key="waves_spinner_playground"):
-                run_mcp_llm_conversation(
-                    client, deployment, messages, tools_schema, function_map
-                )
+                run_mcp_llm_conversation(client, deployment, messages, tools_schema, function_map)
         else:
-            run_mcp_llm_conversation(
-                client, deployment, messages, tools_schema, function_map
-            )
+            run_mcp_llm_conversation(client, deployment, messages, tools_schema, function_map)

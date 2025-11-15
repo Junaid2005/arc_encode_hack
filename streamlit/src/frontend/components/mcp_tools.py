@@ -35,3 +35,4 @@ def _render_tool_runner(*args: Any, **kwargs: Any) -> Any:  # type: ignore[overr
 
 def render_mcp_tools_page(*args: Any, **kwargs: Any) -> Any:
     return _load_module().render_mcp_tools_page(*args, **kwargs)
+

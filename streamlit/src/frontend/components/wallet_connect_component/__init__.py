@@ -49,6 +49,7 @@ def connect_wallet(
     tx_label: Optional[str] = None,
     preferred_address: Optional[str] = None,
     autoconnect: Optional[bool] = None,
+    auto_submit: Optional[bool] = None,
     mode: Optional[str] = None,
     command: Optional[str] = None,
     command_payload: Optional[Dict[str, Any]] = None,
@@ -82,6 +83,8 @@ def connect_wallet(
         args["preferred_address"] = preferred_address
     if autoconnect is not None:
         args["autoconnect"] = bool(autoconnect)
+    if auto_submit is not None:
+        args["auto_submit"] = bool(auto_submit)
     if mode:
         args["mode"] = mode
     if command:

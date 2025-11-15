@@ -38,3 +38,4 @@ def parse_command_file(path: Path) -> List[Tuple[str, str]]:
         entries.append(("command", buffer.strip()))
 
     return entries
+

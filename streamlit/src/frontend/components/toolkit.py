@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from .toolkit_lib.messages import tool_success, tool_error, render_tool_message
 from .toolkit_lib.history import render_llm_history
-from .toolkit_lib.sbt_tools import build_llm_toolkit
+from .toolkit_lib.sbt_tools import build_llm_toolkit, build_sbt_guard
 from .toolkit_lib.pool_tools import build_lending_pool_toolkit
+from .toolkit_lib.bridge_tools import build_bridge_toolkit
 from .toolkit_lib.tx_helpers import (
     fee_params,
     next_nonce,
@@ -25,7 +26,9 @@ __all__ = [
     "render_tool_message",
     "render_llm_history",
     "build_llm_toolkit",
+    "build_sbt_guard",
     "build_lending_pool_toolkit",
+    "build_bridge_toolkit",
     "fee_params",
     "next_nonce",
     "sign_and_send",
