@@ -25,7 +25,9 @@ def _has_sbt(w3: Web3, contract: Contract, checksum_wallet: str) -> bool:
         pass
     try:
         tid_fn = getattr(contract.functions, "tokenIdOf", None)
-        token_id = int(tid_fn(checksum_wallet).call()) if tid_fn else int(checksum_wallet, 16)
+        token_id = (
+            int(tid_fn(checksum_wallet).call()) if tid_fn else int(checksum_wallet, 16)
+        )
         owner_fn = getattr(contract.functions, "ownerOf", None)
         if owner_fn is None:
             fb = w3.eth.contract(
@@ -67,7 +69,16 @@ def build_llm_toolkit(
         parameters: Dict[str, Any],
         handler: Callable[..., str],
     ) -> None:
-        tools.append({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                },
+            }
+        )
         handlers[name] = handler
 
     # ---- Reads ----
@@ -81,13 +92,19 @@ def build_llm_toolkit(
             has_fn = getattr(contract.functions, "hasSbt", None)
             if has_fn is not None:
                 has = bool(has_fn(checksum_wallet).call())
-                return tool_success({"wallet": checksum_wallet, "hasSbt": has, "strategy": "hasSbt"})
+                return tool_success(
+                    {"wallet": checksum_wallet, "hasSbt": has, "strategy": "hasSbt"}
+                )
         except (ContractLogicError, Web3Exception):
             pass
         # Fallback via ownerOf(tokenId)
         try:
             tid_fn = getattr(contract.functions, "tokenIdOf", None)
-            tid = int(tid_fn(checksum_wallet).call()) if tid_fn else int(checksum_wallet, 16)
+            tid = (
+                int(tid_fn(checksum_wallet).call())
+                if tid_fn
+                else int(checksum_wallet, 16)
+            )
             owner_of_fn = getattr(contract.functions, "ownerOf", None)
             if owner_of_fn is None:
                 fb = w3.eth.contract(
@@ -106,9 +123,23 @@ def build_llm_toolkit(
             else:
                 owner = owner_of_fn(tid).call()
             has = owner not in (None, "0x0000000000000000000000000000000000000000")
-            return tool_success({"wallet": checksum_wallet, "hasSbt": has, "strategy": "ownerOf_fallback", "tokenId": str(tid), "owner": owner})
+            return tool_success(
+                {
+                    "wallet": checksum_wallet,
+                    "hasSbt": has,
+                    "strategy": "ownerOf_fallback",
+                    "tokenId": str(tid),
+                    "owner": owner,
+                }
+            )
         except ContractLogicError:
-            return tool_success({"wallet": checksum_wallet, "hasSbt": False, "strategy": "ownerOf_revert"})
+            return tool_success(
+                {
+                    "wallet": checksum_wallet,
+                    "hasSbt": False,
+                    "strategy": "ownerOf_revert",
+                }
+            )
         except Web3Exception as exc:
             return tool_error(f"Web3 error: {exc}")
         except Exception as exc:
@@ -119,7 +150,12 @@ def build_llm_toolkit(
         "Check whether a wallet has a TrustMint SBT.",
         {
             "type": "object",
-            "properties": {"wallet_address": {"type": "string", "description": "Wallet address to check."}},
+            "properties": {
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Wallet address to check.",
+                }
+            },
             "required": ["wallet_address"],
         },
         hasSbt_tool,
@@ -135,7 +171,15 @@ def build_llm_toolkit(
             score_fn = getattr(contract.functions, "getScore", None)
             if score_fn is not None:
                 value, timestamp, valid = score_fn(checksum_wallet).call()
-                return tool_success({"wallet": checksum_wallet, "value": int(value), "timestamp": int(timestamp), "valid": bool(valid), "strategy": "getScore"})
+                return tool_success(
+                    {
+                        "wallet": checksum_wallet,
+                        "value": int(value),
+                        "timestamp": int(timestamp),
+                        "valid": bool(valid),
+                        "strategy": "getScore",
+                    }
+                )
         except (ContractLogicError, Web3Exception):
             pass
         # Fallback scores mapping
@@ -143,7 +187,15 @@ def build_llm_toolkit(
             scores_fn = getattr(contract.functions, "scores", None)
             if scores_fn is not None:
                 value, timestamp, valid = scores_fn(checksum_wallet).call()
-                return tool_success({"wallet": checksum_wallet, "value": int(value), "timestamp": int(timestamp), "valid": bool(valid), "strategy": "scores"})
+                return tool_success(
+                    {
+                        "wallet": checksum_wallet,
+                        "value": int(value),
+                        "timestamp": int(timestamp),
+                        "valid": bool(valid),
+                        "strategy": "scores",
+                    }
+                )
         except (ContractLogicError, Web3Exception):
             pass
         # Minimal ABI fallback
@@ -181,7 +233,15 @@ def build_llm_toolkit(
             except Exception:
                 value, timestamp, valid = fb.functions.scores(checksum_wallet).call()
                 strategy = "fallback_scores"
-            return tool_success({"wallet": checksum_wallet, "value": int(value), "timestamp": int(timestamp), "valid": bool(valid), "strategy": strategy})
+            return tool_success(
+                {
+                    "wallet": checksum_wallet,
+                    "value": int(value),
+                    "timestamp": int(timestamp),
+                    "valid": bool(valid),
+                    "strategy": strategy,
+                }
+            )
         except ContractLogicError as exc:
             return tool_error(f"Contract rejected the call: {exc}")
         except Web3Exception as exc:
@@ -194,7 +254,12 @@ def build_llm_toolkit(
         "Read the TrustMint SBT score tuple (value, timestamp, valid) for a wallet.",
         {
             "type": "object",
-            "properties": {"wallet_address": {"type": "string", "description": "Wallet address to query."}},
+            "properties": {
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Wallet address to query.",
+                }
+            },
             "required": ["wallet_address"],
         },
         getScore_tool,
@@ -216,7 +281,9 @@ def build_llm_toolkit(
 
     def issueScore_tool(wallet_address: str, score_value: int) -> str:
         if not derived_private_key:
-            return tool_error("PRIVATE_KEY not configured. Configure it in .env to submit transactions.")
+            return tool_error(
+                "PRIVATE_KEY not configured. Configure it in .env to submit transactions."
+            )
         try:
             checksum_wallet = Web3.to_checksum_address(wallet_address)
         except ValueError:
@@ -263,12 +330,16 @@ def build_llm_toolkit(
             sent = sign_and_send(w3, derived_private_key, tx)
             if "error" in sent:
                 # Retry once with fee bump if underpriced
-                if sent.get("status") == "underpriced" or "underpriced" in sent.get("error", ""):
+                if sent.get("status") == "underpriced" or "underpriced" in sent.get(
+                    "error", ""
+                ):
                     # bump fees ~15%
                     if "maxFeePerGas" in fees:
                         fees_bumped = {
                             "maxFeePerGas": int(fees["maxFeePerGas"] * 1.15),
-                            "maxPriorityFeePerGas": int(fees["maxPriorityFeePerGas"] * 1.15),
+                            "maxPriorityFeePerGas": int(
+                                fees["maxPriorityFeePerGas"] * 1.15
+                            ),
                         }
                     else:
                         fees_bumped = {"gasPrice": int(fees["gasPrice"] * 1.15)}
@@ -277,7 +348,11 @@ def build_llm_toolkit(
                         tx[k] = v
                     sent = sign_and_send(w3, derived_private_key, tx)
                 if "error" in sent:
-                    return tool_error(sent["error"]) if isinstance(sent["error"], str) else tool_error(str(sent["error"]))
+                    return (
+                        tool_error(sent["error"])
+                        if isinstance(sent["error"], str)
+                        else tool_error(str(sent["error"]))
+                    )
             return tool_success(sent)
         except ContractLogicError as exc:
             return tool_error(f"Contract rejected the transaction: {exc}")
@@ -292,8 +367,14 @@ def build_llm_toolkit(
         {
             "type": "object",
             "properties": {
-                "wallet_address": {"type": "string", "description": "Wallet address to score."},
-                "score_value": {"type": "integer", "description": "Numerical credit score to assign."},
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Wallet address to score.",
+                },
+                "score_value": {
+                    "type": "integer",
+                    "description": "Numerical credit score to assign.",
+                },
             },
             "required": ["wallet_address", "score_value"],
         },
@@ -302,7 +383,9 @@ def build_llm_toolkit(
 
     def revokeScore_tool(wallet_address: str) -> str:
         if not derived_private_key:
-            return tool_error("PRIVATE_KEY not configured. Configure it in .env to submit transactions.")
+            return tool_error(
+                "PRIVATE_KEY not configured. Configure it in .env to submit transactions."
+            )
         try:
             checksum_wallet = Web3.to_checksum_address(wallet_address)
         except ValueError:
@@ -317,7 +400,9 @@ def build_llm_toolkit(
             return tool_error(msg)
         # Preflight: ensure SBT is minted to avoid revert
         if not _has_sbt(w3, contract, checksum_wallet):
-            return tool_error("SBT not minted for this wallet; revokeScore would revert.")
+            return tool_error(
+                "SBT not minted for this wallet; revokeScore would revert."
+            )
         try:
             fees = fee_params(w3, gas_price_gwei)
             nonce = next_nonce(w3, owner_acct.address)
@@ -348,11 +433,15 @@ def build_llm_toolkit(
             sent = sign_and_send(w3, derived_private_key, tx)
             if "error" in sent:
                 # Retry once with fee bump if underpriced
-                if sent.get("status") == "underpriced" or "underpriced" in sent.get("error", ""):
+                if sent.get("status") == "underpriced" or "underpriced" in sent.get(
+                    "error", ""
+                ):
                     if "maxFeePerGas" in fees:
                         fees_bumped = {
                             "maxFeePerGas": int(fees["maxFeePerGas"] * 1.15),
-                            "maxPriorityFeePerGas": int(fees["maxPriorityFeePerGas"] * 1.15),
+                            "maxPriorityFeePerGas": int(
+                                fees["maxPriorityFeePerGas"] * 1.15
+                            ),
                         }
                     else:
                         fees_bumped = {"gasPrice": int(fees["gasPrice"] * 1.15)}
@@ -361,7 +450,11 @@ def build_llm_toolkit(
                         tx[k] = v
                     sent = sign_and_send(w3, derived_private_key, tx)
                 if "error" in sent:
-                    return tool_error(sent["error"]) if isinstance(sent["error"], str) else tool_error(str(sent["error"]))
+                    return (
+                        tool_error(sent["error"])
+                        if isinstance(sent["error"], str)
+                        else tool_error(str(sent["error"]))
+                    )
             return tool_success(sent)
         except ContractLogicError as exc:
             return tool_error(f"Contract rejected the transaction: {exc}")
@@ -375,7 +468,12 @@ def build_llm_toolkit(
         "Revoke (invalidate) an SBT borrower score (owner-only).",
         {
             "type": "object",
-            "properties": {"wallet_address": {"type": "string", "description": "Borrower wallet address."}},
+            "properties": {
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                }
+            },
             "required": ["wallet_address"],
         },
         revokeScore_tool,
@@ -398,4 +496,3 @@ def build_sbt_guard(
         return "Borrower must hold the required TrustMint SBT credential before requesting this action."
 
     return guard
-

@@ -27,7 +27,9 @@ def extract_text_from_upload(upload) -> str:
 
                 try:
                     reader = PdfReader(BytesIO(data))
-                    return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+                    return "\n\n".join(
+                        (page.extract_text() or "") for page in reader.pages
+                    )
                 except Exception:
                     return ""
             else:

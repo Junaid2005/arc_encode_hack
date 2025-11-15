@@ -11,4 +11,3 @@ def log_section(log_handle, header: str, content: str | None = None) -> None:
     print(header)
     if content:
         print(content)
-

@@ -1,4 +1,5 @@
 """Auto-execute pending MetaMask transactions using Streamlit components."""
+
 from __future__ import annotations
 
 import streamlit as st
@@ -10,10 +11,10 @@ def auto_execute_pending_tx() -> None:
     pending = st.session_state.get("chatbot_wallet_pending_command")
     if not pending or not isinstance(pending, dict):
         return
-    
+
     if pending.get("command") != "send_transaction":
         return
-    
+
     # Inject JavaScript that finds and clicks the transaction button
     html = """
     <script>
@@ -64,6 +65,5 @@ def auto_execute_pending_tx() -> None:
     </script>
     <div style="display:none">AutoTX Active</div>
     """
-    
-    components.html(html, height=0)
 
+    components.html(html, height=0)

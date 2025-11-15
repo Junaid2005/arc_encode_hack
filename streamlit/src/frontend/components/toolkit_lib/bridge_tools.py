@@ -87,12 +87,17 @@ def _load_bridge_config() -> Tuple[Optional[BridgeConfig], Optional[str]]:
     abi_env_value = os.getenv(LENDING_POOL_ABI_PATH_ENV)
     abi_path, abi_source, invalid_path = resolve_lending_pool_abi_path(abi_env_value)
     if invalid_path:
-        return None, f"ABI path set via `{LENDING_POOL_ABI_PATH_ENV}` was not found: `{invalid_path}`"
+        return (
+            None,
+            f"ABI path set via `{LENDING_POOL_ABI_PATH_ENV}` was not found: `{invalid_path}`",
+        )
     if not abi_path:
         missing_envs.append(f"{LENDING_POOL_ABI_PATH_ENV} (or compile LendingPool)")
 
     if missing_envs:
-        return None, "Configure the following settings before continuing: " + ", ".join(missing_envs)
+        return None, "Configure the following settings before continuing: " + ", ".join(
+            missing_envs
+        )
 
     gas_limit = _parse_int(os.getenv(GAS_LIMIT_ENV))
     gas_price_wei = _parse_gas_price(os.getenv(GAS_PRICE_GWEI_ENV))
@@ -123,8 +128,19 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
     handlers: Dict[str, Any] = {}
 
-    def register(name: str, description: str, parameters: Dict[str, Any], handler: Any) -> None:
-        tools.append({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
+    def register(
+        name: str, description: str, parameters: Dict[str, Any], handler: Any
+    ) -> None:
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                },
+            }
+        )
         handlers[name] = handler
 
     def arc_transfer_tool(arc_recipient: str, amount: str) -> str:
@@ -160,8 +176,14 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         {
             "type": "object",
             "properties": {
-                "arc_recipient": {"type": "string", "description": "ARC recipient wallet address."},
-                "amount": {"type": "string", "description": "Amount of USDC to transfer (e.g., 0.10)."},
+                "arc_recipient": {
+                    "type": "string",
+                    "description": "ARC recipient wallet address.",
+                },
+                "amount": {
+                    "type": "string",
+                    "description": "Amount of USDC to transfer (e.g., 0.10).",
+                },
             },
             "required": ["arc_recipient", "amount"],
         },
@@ -192,7 +214,9 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         lambda: clear_arc_transfer_tool(),
     )
 
-    def start_bridge_tool(polygon_address: str, amount: str, wait_for_attestation: bool = False) -> str:
+    def start_bridge_tool(
+        polygon_address: str, amount: str, wait_for_attestation: bool = False
+    ) -> str:
 
         config, error = _load_bridge_config()
         if error or config is None:
@@ -236,8 +260,14 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         {
             "type": "object",
             "properties": {
-                "polygon_address": {"type": "string", "description": "Destination Polygon wallet address."},
-                "amount": {"type": "string", "description": "Amount of USDC to bridge (e.g., 0.10)."},
+                "polygon_address": {
+                    "type": "string",
+                    "description": "Destination Polygon wallet address.",
+                },
+                "amount": {
+                    "type": "string",
+                    "description": "Amount of USDC to bridge (e.g., 0.10).",
+                },
                 "wait_for_attestation": {
                     "type": "boolean",
                     "description": "If true, wait for Circle attestation before returning.",
@@ -283,7 +313,9 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         ]
         missing = [key for key in required_keys if not bridge_state.get(key)]
         if missing:
-            return tool_error(f"Bridge session is missing required fields: {', '.join(missing)}")
+            return tool_error(
+                f"Bridge session is missing required fields: {', '.join(missing)}"
+            )
 
         logs: List[str] = []
         try:
@@ -337,7 +369,9 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         polygon_address = bridge_state.get("polygon_address")
 
         if not message or not attestation:
-            return tool_error("Bridge session missing attestation payload. Call `resumeArcPolygonBridge` first.")
+            return tool_error(
+                "Bridge session missing attestation payload. Call `resumeArcPolygonBridge` first."
+            )
         if not tx_request:
             return tool_error("Bridge session missing transaction request payload.")
 
@@ -351,7 +385,9 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         }
         if polygon_address:
             payload["metamask"]["from"] = polygon_address
-        st.session_state.setdefault(MCP_POLYGON_STATUS_KEY, {"level": "info", "message": "Polygon mint ready."})
+        st.session_state.setdefault(
+            MCP_POLYGON_STATUS_KEY, {"level": "info", "message": "Polygon mint ready."}
+        )
         st.session_state.pop(MCP_POLYGON_COMPLETE_KEY, None)
         st.session_state.pop(MCP_POLYGON_LOGS_KEY, None)
         return tool_success(payload)
@@ -378,4 +414,3 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     )
 
     return tools, handlers
-

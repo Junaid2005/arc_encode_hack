@@ -15,4 +15,3 @@ def render_navigation() -> str:
         st.title("Navigation")
         selected = st.radio("Choose a view", PAGES, index=0)
     return selected
-

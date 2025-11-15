@@ -21,4 +21,3 @@ __all__ = [
     "PLACEHOLDER_MARKERS",
     "ENV_VAR_PATTERN",
 ]
-

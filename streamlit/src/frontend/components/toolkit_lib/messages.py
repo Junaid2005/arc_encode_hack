@@ -13,7 +13,9 @@ def tool_success(payload: Dict[str, Any]) -> str:
 
 
 def tool_error(message: str, **extras: Any) -> str:
-    return json.dumps({"success": False, "error": message, **extras}, default=_json_default)
+    return json.dumps(
+        {"success": False, "error": message, **extras}, default=_json_default
+    )
 
 
 def _json_default(value: Any) -> Any:
@@ -26,14 +28,14 @@ def render_tool_message(tool_name: str, content: str) -> None:
     with st.chat_message("assistant"):
         st.markdown(f"**Tool `{tool_name}` output:**")
         _render_tool_content(content)
-        
+
         # Check if tool wants to show a transaction button
         try:
             parsed = json.loads(content)
             if isinstance(parsed, dict) and parsed.get("show_button"):
                 button_label = parsed.get("button_label", "Approve Transaction")
                 button_key = f"tx_button_{tool_name}_{hash(content)}"
-                
+
                 if st.button(f"🔐 {button_label}", key=button_key, type="primary"):
                     pending = st.session_state.get("chatbot_wallet_pending_command")
                     if isinstance(pending, dict):
@@ -68,6 +70,7 @@ def _render_user_message(content: str) -> None:
             pre, attach_block = content.split("[Attached documents]", 1)
             st.markdown(pre.strip())
             import re
+
             preview_chars = int(os.getenv("CHAT_PREVIEW_MAX_CHARS", "1000"))
             sections = re.split(r"(?m)^###\s*", attach_block)
             if len(sections) > 1:
@@ -91,4 +94,3 @@ def _render_user_message(content: str) -> None:
                     st.markdown("(preview unavailable)")
         else:
             st.markdown(content or "")
-

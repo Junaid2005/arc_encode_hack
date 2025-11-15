@@ -52,32 +52,48 @@ def build_lending_pool_toolkit(
 
     def _get_owner_key() -> Optional[str]:
         return role_private_keys.get("Owner") or derived_private_key
-    
+
     def _get_lender_key() -> Optional[str]:
         return role_private_keys.get("Lender")
-    
+
     def _get_borrower_key() -> Optional[str]:
         return role_private_keys.get("Borrower")
-    
+
     def _get_owner_address() -> Optional[str]:
         return role_addresses.get("Owner") or _acct_for_key(_get_owner_key())
-    
+
     def _get_lender_address() -> Optional[str]:
         return role_addresses.get("Lender") or _acct_for_key(_get_lender_key())
-    
+
     def _get_borrower_address() -> Optional[str]:
         return role_addresses.get("Borrower") or _acct_for_key(_get_borrower_key())
-    
+
     # Legacy variables for compatibility
     owner_key = _get_owner_key()
     lender_key = _get_lender_key()
     borrower_key = _get_borrower_key()
 
-    def register(name: str, description: str, parameters: Dict[str, Any], handler: Callable[..., str]) -> None:
-        tools.append({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
+    def register(
+        name: str,
+        description: str,
+        parameters: Dict[str, Any],
+        handler: Callable[..., str],
+    ) -> None:
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                },
+            }
+        )
         handlers[name] = handler
 
-    def _metamask_success(tx_req: Dict[str, Any], hint: str, from_addr: Optional[str]) -> str:
+    def _metamask_success(
+        tx_req: Dict[str, Any], hint: str, from_addr: Optional[str]
+    ) -> str:
         payload: Dict[str, Any] = {
             "metamask": {
                 "tx_request": tx_req,
@@ -96,7 +112,9 @@ def build_lending_pool_toolkit(
     def _to_token_units(amount: float | int, *, use_native: bool = False) -> int:
         try:
             amt = Decimal(str(amount))
-            scale = Decimal(10) ** int(native_decimals if use_native else token_decimals)
+            scale = Decimal(10) ** int(
+                native_decimals if use_native else token_decimals
+            )
             return int(amt * scale)
         except Exception:
             return int(amount)
@@ -126,7 +144,9 @@ def build_lending_pool_toolkit(
             if isinstance(loan, tuple) and len(loan) == 5:
                 principal, outstanding, start_time, due_time, state_or_flag = loan
                 state_code = int(state_or_flag)
-                banned_flag = bool(getattr(pool_contract.functions, "isBanned")(address).call())
+                banned_flag = bool(
+                    getattr(pool_contract.functions, "isBanned")(address).call()
+                )
                 return (
                     state_code,
                     int(principal),
@@ -143,10 +163,18 @@ def build_lending_pool_toolkit(
             status_fn = getattr(pool_contract.functions, "lenderStatus", None)
             if status_fn is not None:
                 return status_fn(address).call()
-            total_dep = int(getattr(pool_contract.functions, "totalDeposited")(address).call())
-            total_withdrawn = int(getattr(pool_contract.functions, "totalWithdrawn")(address).call())
-            balance = int(getattr(pool_contract.functions, "lenderBalance")(address).call())
-            unlockable = int(getattr(pool_contract.functions, "previewWithdraw")(address).call())
+            total_dep = int(
+                getattr(pool_contract.functions, "totalDeposited")(address).call()
+            )
+            total_withdrawn = int(
+                getattr(pool_contract.functions, "totalWithdrawn")(address).call()
+            )
+            balance = int(
+                getattr(pool_contract.functions, "lenderBalance")(address).call()
+            )
+            unlockable = int(
+                getattr(pool_contract.functions, "previewWithdraw")(address).call()
+            )
             return total_dep, total_withdrawn, balance, unlockable
         except Exception:
             return None
@@ -162,7 +190,9 @@ def build_lending_pool_toolkit(
             human = _from_token_units(outstanding, use_native=True)
             return False, f"Borrower has an active loan outstanding ({human} units)"
         try:
-            available = int(getattr(pool_contract.functions, "availableLiquidity")().call())
+            available = int(
+                getattr(pool_contract.functions, "availableLiquidity")().call()
+            )
         except Exception:
             return False, "Unable to read pool liquidity"
         if available < principal_units:
@@ -190,7 +220,9 @@ def build_lending_pool_toolkit(
     # ---- Views ----
     def availableLiquidity_tool() -> str:
         try:
-            amount = int(getattr(pool_contract.functions, "availableLiquidity")().call())
+            amount = int(
+                getattr(pool_contract.functions, "availableLiquidity")().call()
+            )
             return tool_success({"availableLiquidity": amount})
         except Exception as exc:
             return tool_error(f"Read failed: {exc}")
@@ -205,7 +237,9 @@ def build_lending_pool_toolkit(
     def lenderBalance_tool(lender_address: str) -> str:
         try:
             lender = Web3.to_checksum_address(lender_address)
-            amount = int(getattr(pool_contract.functions, "lenderBalance")(lender).call())
+            amount = int(
+                getattr(pool_contract.functions, "lenderBalance")(lender).call()
+            )
             return tool_success({"lender": lender, "balance": amount})
         except Exception as exc:
             return tool_error(f"Read failed: {exc}")
@@ -215,7 +249,12 @@ def build_lending_pool_toolkit(
         "Read net balance (deposits - withdrawals) for a lender.",
         {
             "type": "object",
-            "properties": {"lender_address": {"type": "string", "description": "Lender wallet address."}},
+            "properties": {
+                "lender_address": {
+                    "type": "string",
+                    "description": "Lender wallet address.",
+                }
+            },
             "required": ["lender_address"],
         },
         lenderBalance_tool,
@@ -228,7 +267,9 @@ def build_lending_pool_toolkit(
             return tool_error("Invalid lender address supplied.")
         status = _lender_status(lender)
         if status is None:
-            return tool_error("Unable to read lender status; ensure contract is upgraded.")
+            return tool_error(
+                "Unable to read lender status; ensure contract is upgraded."
+            )
         total_dep, total_withdrawn, balance, unlockable = map(int, status)
         return tool_success(
             {
@@ -247,7 +288,12 @@ def build_lending_pool_toolkit(
         "Read aggregated lender metrics (deposited, withdrawn, unlockable).",
         {
             "type": "object",
-            "properties": {"lender_address": {"type": "string", "description": "Lender wallet address."}},
+            "properties": {
+                "lender_address": {
+                    "type": "string",
+                    "description": "Lender wallet address.",
+                }
+            },
             "required": ["lender_address"],
         },
         lenderStatus_tool,
@@ -259,16 +305,22 @@ def build_lending_pool_toolkit(
             status = _loan_status(borrower)
             if status is None:
                 return tool_error("Unable to read loan status for borrower.")
-            state_code, principal, outstanding, start_time, due_time, banned_flag = status
+            state_code, principal, outstanding, start_time, due_time, banned_flag = (
+                status
+            )
             return tool_success(
                 {
                     "borrower": borrower,
                     "principal": int(principal),
                     "outstanding": int(outstanding),
-                    "outstandingHuman": str(_from_token_units(int(outstanding), use_native=True)),
+                    "outstandingHuman": str(
+                        _from_token_units(int(outstanding), use_native=True)
+                    ),
                     "startTime": int(start_time),
                     "dueTime": int(due_time),
-                    "state": _LOAN_STATE_LABELS.get(state_code, f"Unknown({state_code})"),
+                    "state": _LOAN_STATE_LABELS.get(
+                        state_code, f"Unknown({state_code})"
+                    ),
                     "stateCode": int(state_code),
                     "banned": bool(banned_flag),
                 }
@@ -281,7 +333,12 @@ def build_lending_pool_toolkit(
         "Read loan struct for a borrower (principal, outstanding, startTime, dueTime, state).",
         {
             "type": "object",
-            "properties": {"borrower_address": {"type": "string", "description": "Borrower wallet address."}},
+            "properties": {
+                "borrower_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                }
+            },
             "required": ["borrower_address"],
         },
         getLoan_tool,
@@ -300,7 +357,12 @@ def build_lending_pool_toolkit(
         "Check if a borrower is banned due to default.",
         {
             "type": "object",
-            "properties": {"borrower_address": {"type": "string", "description": "Borrower wallet address."}},
+            "properties": {
+                "borrower_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                }
+            },
             "required": ["borrower_address"],
         },
         isBanned_tool,
@@ -333,7 +395,11 @@ def build_lending_pool_toolkit(
                     }
                 )
                 sent = sign_and_send(w3, lender_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "deposit failed"))
+                return (
+                    tool_success(sent)
+                    if "error" not in sent
+                    else tool_error(sent.get("error", "deposit failed"))
+                )
             except ContractLogicError as exc:
                 return tool_error(f"Contract rejected: {exc}")
             except Exception as exc:
@@ -366,7 +432,12 @@ def build_lending_pool_toolkit(
         "Deposit USDC into the LendingPool (requires prior approve).",
         {
             "type": "object",
-            "properties": {"amount": {"type": "number", "description": "Amount in human units (e.g., 100 USDC)."}},
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "Amount in human units (e.g., 100 USDC).",
+                }
+            },
             "required": ["amount"],
         },
         deposit_tool,
@@ -422,7 +493,11 @@ def build_lending_pool_toolkit(
                     }
                 )
                 sent = sign_and_send(w3, lender_key, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "withdraw failed"))
+                return (
+                    tool_success(sent)
+                    if "error" not in sent
+                    else tool_error(sent.get("error", "withdraw failed"))
+                )
             except ContractLogicError as exc:
                 return tool_error(f"Contract rejected: {exc}")
             except Exception as exc:
@@ -453,13 +528,17 @@ def build_lending_pool_toolkit(
         "Withdraw available USDC from the LendingPool (subject to liquidity/locks).",
         {
             "type": "object",
-            "properties": {"amount": {"type": "number", "description": "Amount in human units."}},
+            "properties": {
+                "amount": {"type": "number", "description": "Amount in human units."}
+            },
             "required": ["amount"],
         },
         withdraw_tool,
     )
 
-    def openLoan_tool(borrower_address: str, principal: float | int, term_seconds: int) -> str:
+    def openLoan_tool(
+        borrower_address: str, principal: float | int, term_seconds: int
+    ) -> str:
         try:
             borrower = Web3.to_checksum_address(borrower_address)
         except ValueError:
@@ -486,7 +565,9 @@ def build_lending_pool_toolkit(
                 status = _loan_status(borrower)
                 if status is not None:
                     _, _, outstanding, _, _, _ = status
-                    human_outstanding = _from_token_units(int(outstanding), use_native=True)
+                    human_outstanding = _from_token_units(
+                        int(outstanding), use_native=True
+                    )
                     return tool_error(
                         f"Cannot open loan: borrower has an active loan outstanding ({human_outstanding} native units)."
                     )
@@ -494,22 +575,38 @@ def build_lending_pool_toolkit(
                 return tool_error("Cannot open loan: borrower is banned.")
             if "insufficient pool liquidity" in normalized_reason:
                 try:
-                    available = int(getattr(pool_contract.functions, "availableLiquidity")().call())
+                    available = int(
+                        getattr(pool_contract.functions, "availableLiquidity")().call()
+                    )
                     human_available = _from_token_units(available, use_native=True)
-                    return tool_error(f"Cannot open loan: only {human_available} native units are currently available in the pool.")
+                    return tool_error(
+                        f"Cannot open loan: only {human_available} native units are currently available in the pool."
+                    )
                 except Exception:
                     return tool_error("Cannot open loan: insufficient pool liquidity.")
             if "score too low" in normalized_reason:
-                return tool_error("Cannot open loan: borrower credit score is below the required minimum.")
+                return tool_error(
+                    "Cannot open loan: borrower credit score is below the required minimum."
+                )
             if "score invalid" in normalized_reason:
                 return tool_error("Cannot open loan: borrower score is invalid.")
             if "missing sbt" in normalized_reason:
-                return tool_error("Cannot open loan: borrower does not hold the required TrustMint SBT credential.")
+                return tool_error(
+                    "Cannot open loan: borrower does not hold the required TrustMint SBT credential."
+                )
             if "principal zero" in normalized_reason:
-                return tool_error("Cannot open loan: requested principal must be greater than zero.")
+                return tool_error(
+                    "Cannot open loan: requested principal must be greater than zero."
+                )
             if "term zero" in normalized_reason:
-                return tool_error("Cannot open loan: loan term must be greater than zero seconds.")
-            human_readable_reason = normalized_reason.strip().capitalize() if normalized_reason else str(reason)
+                return tool_error(
+                    "Cannot open loan: loan term must be greater than zero seconds."
+                )
+            human_readable_reason = (
+                normalized_reason.strip().capitalize()
+                if normalized_reason
+                else str(reason)
+            )
             return tool_error(f"Cannot open loan: {human_readable_reason}")
 
         owner_pk = _get_owner_key()
@@ -518,11 +615,15 @@ def build_lending_pool_toolkit(
             try:
                 fees = _fees()
                 nonce = next_nonce(w3, signer)
-                tx = pool_contract.functions.openLoan(borrower, principal_units, int(term_seconds)).build_transaction(
+                tx = pool_contract.functions.openLoan(
+                    borrower, principal_units, int(term_seconds)
+                ).build_transaction(
                     {
                         "from": signer,
                         "nonce": nonce,
-                        "gas": max(default_gas_limit, 500000),  # openLoan needs ~500k gas
+                        "gas": max(
+                            default_gas_limit, 500000
+                        ),  # openLoan needs ~500k gas
                         "chainId": w3.eth.chain_id,
                         **fees,
                     }
@@ -573,9 +674,18 @@ def build_lending_pool_toolkit(
         {
             "type": "object",
             "properties": {
-                "borrower_address": {"type": "string", "description": "Borrower wallet address."},
-                "principal": {"type": "number", "description": "Principal in human units (e.g., 50 USDC)."},
-                "term_seconds": {"type": "integer", "description": "Loan term in seconds (e.g., 604800 for 7 days)."},
+                "borrower_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                },
+                "principal": {
+                    "type": "number",
+                    "description": "Principal in human units (e.g., 50 USDC).",
+                },
+                "term_seconds": {
+                    "type": "integer",
+                    "description": "Loan term in seconds (e.g., 604800 for 7 days).",
+                },
             },
             "required": ["borrower_address", "principal", "term_seconds"],
         },
@@ -586,7 +696,7 @@ def build_lending_pool_toolkit(
         # Dynamically get borrower address (in case it was assigned after toolkit creation)
         borrower_addr = _get_borrower_address()
         borrower_pk = _get_borrower_key()
-        
+
         if not borrower_addr:
             return tool_error(
                 "Borrower wallet not configured. Assign a borrower address via MetaMask role assignment or set BORROWER_PRIVATE_KEY."
@@ -599,7 +709,9 @@ def build_lending_pool_toolkit(
 
         status = _loan_status(borrower)
         if status is None:
-            return tool_error("Unable to read borrower loan status; ensure contract is upgraded.")
+            return tool_error(
+                "Unable to read borrower loan status; ensure contract is upgraded."
+            )
         state_code, _, outstanding, _, _, banned_flag = status
         if banned_flag:
             return tool_error("Borrower is banned; repay unavailable until unbanned.")
@@ -675,7 +787,9 @@ def build_lending_pool_toolkit(
             try:
                 fees = _fees()
                 nonce = next_nonce(w3, signer)
-                tx = pool_contract.functions.checkDefaultAndBan(borrower).build_transaction(
+                tx = pool_contract.functions.checkDefaultAndBan(
+                    borrower
+                ).build_transaction(
                     {
                         "from": signer,
                         "nonce": nonce,
@@ -685,7 +799,11 @@ def build_lending_pool_toolkit(
                     }
                 )
                 sent = sign_and_send(w3, owner_pk, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "checkDefaultAndBan failed"))
+                return (
+                    tool_success(sent)
+                    if "error" not in sent
+                    else tool_error(sent.get("error", "checkDefaultAndBan failed"))
+                )
             except ContractLogicError as exc:
                 return tool_error(f"Contract rejected: {exc}")
             except Exception as exc:
@@ -717,7 +835,12 @@ def build_lending_pool_toolkit(
         "Anyone: check if borrower defaulted and ban if overdue.",
         {
             "type": "object",
-            "properties": {"borrower_address": {"type": "string", "description": "Borrower wallet address."}},
+            "properties": {
+                "borrower_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                }
+            },
             "required": ["borrower_address"],
         },
         checkDefaultAndBan_tool,
@@ -743,7 +866,11 @@ def build_lending_pool_toolkit(
                     }
                 )
                 sent = sign_and_send(w3, owner_pk, tx)  # type: ignore[arg-type]
-                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "unban failed"))
+                return (
+                    tool_success(sent)
+                    if "error" not in sent
+                    else tool_error(sent.get("error", "unban failed"))
+                )
             except ContractLogicError as exc:
                 return tool_error(f"Contract rejected: {exc}")
             except Exception as exc:
@@ -775,11 +902,15 @@ def build_lending_pool_toolkit(
         "Owner-only: unban a borrower after remedy.",
         {
             "type": "object",
-            "properties": {"borrower_address": {"type": "string", "description": "Borrower wallet address."}},
+            "properties": {
+                "borrower_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address.",
+                }
+            },
             "required": ["borrower_address"],
         },
         unban_tool,
     )
 
     return tools, handlers
-

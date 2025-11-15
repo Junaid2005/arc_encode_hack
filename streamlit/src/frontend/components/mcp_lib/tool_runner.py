@@ -62,13 +62,17 @@ def render_tool_runner(
         else:
             display_names.append(name)
     selection_map = dict(zip(display_names, tool_names))
-    selected_display = st.selectbox("Choose a tool", display_names, key=f"{key_prefix}_tool_select")
+    selected_display = st.selectbox(
+        "Choose a tool", display_names, key=f"{key_prefix}_tool_select"
+    )
     selected = selection_map[selected_display]
 
     required_role = (tool_role_map or {}).get(selected)
     role_private_keys = role_private_keys or {}
     requires_signature_role = bool(required_role and required_role != "Read-only")
-    has_env_signer = bool(role_private_keys.get(required_role)) if required_role else False
+    has_env_signer = (
+        bool(role_private_keys.get(required_role)) if required_role else False
+    )
     requires_metamask_wallet = requires_signature_role and not has_env_signer
     if required_role:
         if required_role == "Read-only":
@@ -77,7 +81,9 @@ def render_tool_runner(
             pk_available = bool(role_private_keys.get(required_role))
             addr = (role_addresses or {}).get(required_role)
             if pk_available:
-                st.caption(f"Signing will use the {required_role} private key from .env.")
+                st.caption(
+                    f"Signing will use the {required_role} private key from .env."
+                )
             elif addr:
                 st.caption(
                     f"Signing will use MetaMask for the {required_role} wallet ({addr})."
@@ -127,10 +133,14 @@ def render_tool_runner(
         _render_logs()
 
     if expected_chain_id is None:
-        _append_log("⚠ Unable to determine ARC chain ID from RPC; MetaMask network enforcement may be limited.")
+        _append_log(
+            "⚠ Unable to determine ARC chain ID from RPC; MetaMask network enforcement may be limited."
+        )
 
     existing_state = st.session_state.get(mm_state_key)
-    mm_state: Dict[str, Any] = existing_state if isinstance(existing_state, dict) else {}
+    mm_state: Dict[str, Any] = (
+        existing_state if isinstance(existing_state, dict) else {}
+    )
     mm_state_chain_id: Optional[int] = None
     if mm_state:
         mm_state_chain_id = _normalise_chain_id(mm_state.get("wallet_chain"))
@@ -217,7 +227,10 @@ def render_tool_runner(
     pending_connect = bool(auto_connect_state.get("pending"))
     connect_sequence = auto_connect_state.get("sequence")
     if pending_connect and not auto_connect_state.get("logged"):
-        stored_reason = auto_connect_state.get("reason") or "MetaMask connection command pending (restored state)."
+        stored_reason = (
+            auto_connect_state.get("reason")
+            or "MetaMask connection command pending (restored state)."
+        )
         METAMASK_LOGGER.info(
             "MetaMask popup (connect) for MCP tool '%s'. Reason: %s.",
             selected,
@@ -247,7 +260,9 @@ def render_tool_runner(
                 }
                 st.session_state[auto_connect_state_key] = auto_connect_state
                 pending_connect = True
-                _append_log("⚠ Requesting MetaMask connection. Approve the request in MetaMask.")
+                _append_log(
+                    "⚠ Requesting MetaMask connection. Approve the request in MetaMask."
+                )
                 METAMASK_LOGGER.info(
                     "MetaMask popup (connect) for MCP tool '%s'. Reason: %s.",
                     selected,
@@ -321,7 +336,10 @@ def render_tool_runner(
     pending_switch = bool(auto_switch_state.get("pending"))
     switch_sequence = auto_switch_state.get("sequence")
     if pending_switch and not auto_switch_state.get("logged"):
-        stored_reason = auto_switch_state.get("reason") or "MetaMask network switch pending (restored state)."
+        stored_reason = (
+            auto_switch_state.get("reason")
+            or "MetaMask network switch pending (restored state)."
+        )
         METAMASK_LOGGER.info(
             "MetaMask popup (switch_network) for MCP tool '%s'. Reason: %s.",
             selected,
@@ -331,8 +349,12 @@ def render_tool_runner(
         st.session_state[auto_switch_state_key] = auto_switch_state
 
     if wallet_connected and chain_mismatch:
-        required_hex = f"0x{expected_chain_id:x}" if expected_chain_id is not None else "unknown"
-        actual_hex = f"0x{current_chain_id:x}" if current_chain_id is not None else "unknown"
+        required_hex = (
+            f"0x{expected_chain_id:x}" if expected_chain_id is not None else "unknown"
+        )
+        actual_hex = (
+            f"0x{current_chain_id:x}" if current_chain_id is not None else "unknown"
+        )
         st.error(
             f"Wallet is connected to chain {current_chain_id} ({actual_hex}); switch to ARC chain {expected_chain_id} ({required_hex}) before running MCP tools."
         )
@@ -377,7 +399,11 @@ def render_tool_runner(
                 command="switch_network",
                 command_sequence=switch_sequence,
                 require_chain_id=expected_chain_id,
-                command_payload={"require_chain_id": expected_chain_id} if expected_chain_id is not None else None,
+                command_payload=(
+                    {"require_chain_id": expected_chain_id}
+                    if expected_chain_id is not None
+                    else None
+                ),
                 preferred_address=str(preferred_address) if preferred_address else None,
                 autoconnect=True,
             )
@@ -428,7 +454,11 @@ def render_tool_runner(
             f"✔ Wallet ready on ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
         )
 
-    if requires_metamask_wallet and expected_chain_id is not None and not wallet_connected:
+    if (
+        requires_metamask_wallet
+        and expected_chain_id is not None
+        and not wallet_connected
+    ):
         st.warning(
             "Connect your MetaMask wallet to continue. If a provider selection window appears, choose MetaMask."
         )
@@ -436,7 +466,9 @@ def render_tool_runner(
     if isinstance(existing_state, dict) and existing_state.get("metamask"):
         st.markdown("### MetaMask bridge")
         render_wallet_section(existing_state, w3, key_prefix, selected)
-        st.info("Complete the wallet action above or clear the MetaMask state before running the tool again.")
+        st.info(
+            "Complete the wallet action above or clear the MetaMask state before running the tool again."
+        )
         if st.button("Clear MetaMask state", key=f"{mm_state_key}_clear"):
             st.session_state.pop(mm_state_key, None)
             st_rerun()
@@ -457,13 +489,19 @@ def render_tool_runner(
 
         widget_key = f"{key_prefix}_param_{selected}_{name}"
         if field_type == "integer":
-            value = st.number_input(label, value=int(default or 0), step=1, key=widget_key)
+            value = st.number_input(
+                label, value=int(default or 0), step=1, key=widget_key
+            )
             inputs[name] = int(value)
         elif field_type == "number":
             value = st.number_input(label, value=float(default or 0), key=widget_key)
             inputs[name] = float(value)
         elif field_type == "boolean":
-            inputs[name] = st.checkbox(label, value=bool(default) if default is not None else False, key=widget_key)
+            inputs[name] = st.checkbox(
+                label,
+                value=bool(default) if default is not None else False,
+                key=widget_key,
+            )
         elif field_type == "array":
             raw = st.text_area(
                 f"{label} (comma separated)",
@@ -481,10 +519,14 @@ def render_tool_runner(
     disable_run = chain_mismatch or (requires_metamask_wallet and not wallet_connected)
     if st.button("Run MCP tool", key=f"{key_prefix}_run_tool", disabled=disable_run):
         if requires_metamask_wallet and not wallet_connected:
-            st.error("Connect your MetaMask wallet on the ARC network before running this tool.")
+            st.error(
+                "Connect your MetaMask wallet on the ARC network before running this tool."
+            )
             return
         if chain_mismatch:
-            st.error("Switch your wallet back to the ARC network before running this tool.")
+            st.error(
+                "Switch your wallet back to the ARC network before running this tool."
+            )
             return
         missing = [param for param in required if not inputs.get(param)]
         if missing:
@@ -512,10 +554,18 @@ def render_tool_runner(
         except Exception:
             parsed = result if isinstance(result, str) else json.dumps(result)
 
-        if isinstance(parsed, dict) and parsed.get("success") and isinstance(parsed.get("metamask"), dict):
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("success")
+            and isinstance(parsed.get("metamask"), dict)
+        ):
             mm = parsed["metamask"]
             state_key = f"mm_state_{key_prefix}_{selected}"
-            mm_state = st.session_state.get(state_key, {}) if isinstance(st.session_state.get(state_key), dict) else {}
+            mm_state = (
+                st.session_state.get(state_key, {})
+                if isinstance(st.session_state.get(state_key), dict)
+                else {}
+            )
             mm_state["metamask"] = mm
             st.session_state[state_key] = mm_state
             st.markdown("### MetaMask bridge")

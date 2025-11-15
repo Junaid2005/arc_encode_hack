@@ -35,7 +35,9 @@ def _normalise_chain_id(value: Any) -> Optional[int]:
     return None
 
 
-def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, selected: str) -> None:
+def render_wallet_section(
+    mm_state: Dict[str, Any], w3: Web3, key_prefix: str, selected: str
+) -> None:
     mm_payload = mm_state.get("metamask", {})
     tx_req = mm_payload.get("tx_request")
     if isinstance(tx_req, str):
@@ -48,7 +50,9 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
     from_address = mm_payload.get("from")
     chain_id = mm_payload.get("chainId")
     if chain_id is None:
-        st.warning("Chain ID not provided by tool; ensure your wallet is connected to the correct network.")
+        st.warning(
+            "Chain ID not provided by tool; ensure your wallet is connected to the correct network."
+        )
 
     cached = st.session_state.get(DEFAULT_SESSION_KEY, {})
     preferred_address = cached.get("address") if isinstance(cached, dict) else None
@@ -61,8 +65,14 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
     mm_state.setdefault("last_value", None)
 
     pending = mm_state.get("pending_command")
-    if isinstance(pending, dict) and pending.get("command") and not pending.get("logged"):
-        stored_reason = pending.get("reason") or "MetaMask command pending (restored state)."
+    if (
+        isinstance(pending, dict)
+        and pending.get("command")
+        and not pending.get("logged")
+    ):
+        stored_reason = (
+            pending.get("reason") or "MetaMask command pending (restored state)."
+        )
         METAMASK_LOGGER.info(
             "MetaMask popup (%s) for MCP bridge '%s/%s'. Reason: %s.",
             pending.get("command"),
@@ -212,7 +222,11 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
         st_rerun()
 
     send_disabled = tx_req is None or chain_mismatch
-    if btn_cols[2].button("Send transaction", key=f"btn_send_{key_prefix}_{selected}", disabled=send_disabled):
+    if btn_cols[2].button(
+        "Send transaction",
+        key=f"btn_send_{key_prefix}_{selected}",
+        disabled=send_disabled,
+    ):
         mm_state["pending_command"] = {
             "command": "send_transaction",
             "payload": {"tx_request": tx_req, "action": action},
@@ -251,16 +265,21 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
             if tx_hash:
                 st.success(f"Transaction sent: {tx_hash}")
                 explorer_url = f"https://testnet.arcscan.app/tx/{tx_hash}"
-                st.markdown(f"[View on Arcscan]({explorer_url})", help="Opens Arcscan for the transaction")
+                st.markdown(
+                    f"[View on Arcscan]({explorer_url})",
+                    help="Opens Arcscan for the transaction",
+                )
                 with st.spinner("Waiting for receipt…"):
                     try:
                         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
                         st.caption("Transaction receipt")
                         st.json(
                             {
-                                "transactionHash": receipt.get("transactionHash").hex()
-                                if receipt.get("transactionHash")
-                                else tx_hash,
+                                "transactionHash": (
+                                    receipt.get("transactionHash").hex()
+                                    if receipt.get("transactionHash")
+                                    else tx_hash
+                                ),
                                 "status": receipt.get("status"),
                                 "blockNumber": receipt.get("blockNumber"),
                                 "gasUsed": receipt.get("gasUsed"),
