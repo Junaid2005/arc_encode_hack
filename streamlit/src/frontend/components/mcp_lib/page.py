@@ -34,7 +34,6 @@ from ..cctp_bridge import (
     resume_arc_to_polygon_bridge,
     transfer_arc_usdc,
 )
-<<<<<<< Updated upstream
 
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit
 from ..verification.score_calculator import wallet_summary_to_score
@@ -50,6 +49,12 @@ from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_g
 from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
 from ..wallet_connect_component import connect_wallet, wallet_command
 from ..web3_utils import get_web3_client, load_contract_abi
+=======
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
+>>>>>>> Stashed changes
 =======
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
 from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
@@ -841,7 +846,6 @@ def _render_cctp_bridge_section(role_addresses: Dict[str, str], wallet_info: Opt
         st.session_state.pop(MCP_POLYGON_AUTO_SWITCH_KEY, None)
         st.session_state.pop(MCP_POLYGON_WALLET_STATE_KEY, None)
         st_rerun()
-<<<<<<< Updated upstream
 
 
 def _render_verification_section() -> None:
@@ -1113,9 +1117,6 @@ def _render_verification_section() -> None:
         if st.button("Clear Results", key="clear_verification_results"):
             st.session_state.pop(verification_results_key, None)
             st_rerun()
-=======
->>>>>>> Stashed changes
-
 
 def render_mcp_tools_page() -> None:
     st.title("🧪 Direct MCP Tool Tester")
