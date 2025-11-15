@@ -39,6 +39,7 @@ def wallet_summary_to_score(wallet_summary: Dict[str, Any]) -> float:
     - Total value moved (0-30 pts): More value = higher score
     - Unique interactions (0-20 pts): More unique addresses = higher score
     - Wallet age (0-20 pts): Older wallet = higher score
+    - Liquidation penalty (0 to -30 pts): Recent/high liquidations reduce score
     
     Args:
         wallet_summary: Dictionary with wallet metrics from OnChainVerifier
@@ -91,7 +92,47 @@ def wallet_summary_to_score(wallet_summary: Dict[str, Any]) -> float:
     else:
         age_score = min(20, 10 + (wallet_age_days - 30) * (10/150))
     
-    total_score = tx_score + value_score + interaction_score + age_score
+    # Liquidation penalty (0 to -30 pts)
+    liquidation_penalty = 0.0
+    liquidations_data = wallet_summary.get("liquidations", {})
+    if liquidations_data:
+        liquidation_count = liquidations_data.get("count", 0)
+        days_since_last = liquidations_data.get("daysSinceLast")
+        severity = liquidations_data.get("severity", 0.0)
+        weighted_count = liquidations_data.get("weightedCount", 0.0)
+        
+        if liquidation_count > 0:
+            # Base penalty from count: -5 pts per liquidation, capped at -20 pts
+            count_penalty = min(20, liquidation_count * 5)
+            
+            # Recency penalty: Recent liquidations (< 90 days) add extra penalty
+            recency_penalty = 0.0
+            if days_since_last is not None and days_since_last < 90:
+                # More recent = higher penalty (max -10 pts if < 30 days)
+                if days_since_last < 30:
+                    recency_penalty = 10
+                elif days_since_last < 60:
+                    recency_penalty = 7
+                else:
+                    recency_penalty = 4
+            
+            # Severity penalty: High severity (> 0.5) adds penalty
+            severity_penalty = 0.0
+            if severity > 0.5:
+                # High severity = additional -5 to -10 pts
+                severity_penalty = min(10, (severity - 0.5) * 20)
+            
+            # Weighted count penalty: Accounts for time-weighted liquidation frequency
+            weighted_penalty = 0.0
+            if weighted_count > 2.0:
+                # High weighted count indicates frequent liquidations
+                weighted_penalty = min(5, (weighted_count - 2.0) * 2.5)
+            
+            liquidation_penalty = -(count_penalty + recency_penalty + severity_penalty + weighted_penalty)
+            # Cap total penalty at -30 pts
+            liquidation_penalty = max(-30, liquidation_penalty)
+    
+    total_score = tx_score + value_score + interaction_score + age_score + liquidation_penalty
     return min(100, max(0, total_score))
 
 

@@ -205,7 +205,7 @@ if __name__ == "__main__":
         ]
         
         test_data = {
-            "wallet_address": "0x1111111111111111111111111111111111111111",
+            "wallet_address": "0x1f0299D886F1328D30E7B9f68a03Aa94feefBCd6",
             "full_name": "John Doe",
             "email": "user@gmail.com",
             "phone": "07450 091422",

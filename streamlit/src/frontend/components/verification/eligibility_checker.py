@@ -97,6 +97,7 @@ class EligibilityChecker:
         
         # Calculate bonuses from wallet metrics
         total_bonus = 0.0
+        liquidation_penalty = 0.0
         
         if wallet_summary:
             wallet_age_days = wallet_summary.get("wallet_age_days", 0.0)
@@ -126,14 +127,52 @@ class EligibilityChecker:
                     f"Value moved bonus (+{self.VALUE_MOVED_BONUS * 100:.0f}%): "
                     f"{total_value_moved:.2f} ETH > {self.VALUE_MOVED_THRESHOLD_ETH} ETH"
                 )
+            
+            # Liquidation penalty
+            liquidations_data = wallet_summary.get("liquidations", {})
+            if liquidations_data:
+                liquidation_count = liquidations_data.get("count", 0)
+                days_since_last = liquidations_data.get("daysSinceLast")
+                severity = liquidations_data.get("severity", 0.0)
+                total_liquidated_usd = liquidations_data.get("totalAmountUSD", 0.0)
+                
+                if liquidation_count > 0:
+                    # Base penalty: -10% per liquidation, capped at -40%
+                    count_penalty_pct = min(0.40, liquidation_count * 0.10)
+                    
+                    # Recency penalty: Recent liquidations add extra penalty
+                    recency_penalty_pct = 0.0
+                    if days_since_last is not None:
+                        if days_since_last < 30:
+                            recency_penalty_pct = 0.20  # -20% if liquidated in last 30 days
+                        elif days_since_last < 60:
+                            recency_penalty_pct = 0.15  # -15% if liquidated in last 60 days
+                        elif days_since_last < 90:
+                            recency_penalty_pct = 0.10  # -10% if liquidated in last 90 days
+                    
+                    # Severity penalty: High severity adds additional penalty
+                    severity_penalty_pct = 0.0
+                    if severity > 0.3:
+                        # High severity = additional -5% to -15%
+                        severity_penalty_pct = min(0.15, (severity - 0.3) * 0.5)
+                    
+                    liquidation_penalty = count_penalty_pct + recency_penalty_pct + severity_penalty_pct
+                    # Cap total liquidation penalty at -50%
+                    liquidation_penalty = min(0.50, liquidation_penalty)
+                    
+                    recency_str = f"{days_since_last:.0f} days since last" if days_since_last is not None else "unknown recency"
+                    factors_applied.append(
+                        f"Liquidation penalty (-{liquidation_penalty * 100:.0f}%): "
+                        f"{liquidation_count} liquidation(s), {recency_str}"
+                    )
         
         # Cap total bonus
         if total_bonus > self.MAX_TOTAL_BONUS:
             factors_applied.append(f"Bonus capped at {self.MAX_TOTAL_BONUS * 100:.0f}%")
             total_bonus = self.MAX_TOTAL_BONUS
         
-        # Calculate final amount
-        final_amount = base_amount * (1 + total_bonus)
+        # Calculate final amount (apply bonuses, then penalties)
+        final_amount = base_amount * (1 + total_bonus) * (1 - liquidation_penalty)
         # Round to nearest dollar
         final_amount = round(final_amount)
         
