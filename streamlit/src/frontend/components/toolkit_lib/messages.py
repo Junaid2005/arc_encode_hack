@@ -13,7 +13,9 @@ def tool_success(payload: Dict[str, Any]) -> str:
 
 
 def tool_error(message: str, **extras: Any) -> str:
-    return json.dumps({"success": False, "error": message, **extras}, default=_json_default)
+    return json.dumps(
+        {"success": False, "error": message, **extras}, default=_json_default
+    )
 
 
 def _json_default(value: Any) -> Any:
@@ -49,6 +51,7 @@ def _render_user_message(content: str) -> None:
             pre, attach_block = content.split("[Attached documents]", 1)
             st.markdown(pre.strip())
             import re
+
             preview_chars = int(os.getenv("CHAT_PREVIEW_MAX_CHARS", "1000"))
             sections = re.split(r"(?m)^###\s*", attach_block)
             if len(sections) > 1:
@@ -72,4 +75,3 @@ def _render_user_message(content: str) -> None:
                     st.markdown("(preview unavailable)")
         else:
             st.markdown(content or "")
-

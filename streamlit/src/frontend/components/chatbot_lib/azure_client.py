@@ -19,4 +19,6 @@ def create_azure_client() -> Optional[AzureOpenAI]:
     if not endpoint or not api_key or AzureOpenAI is None:
         return None
 
-    return AzureOpenAI(azure_endpoint=endpoint, api_key=api_key, api_version=api_version)
+    return AzureOpenAI(
+        azure_endpoint=endpoint, api_key=api_key, api_version=api_version
+    )

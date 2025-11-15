@@ -40,7 +40,9 @@ def _load_dotlottie_animation_data(filepath: str) -> dict | None:
                     for entry in animations:
                         if isinstance(entry, dict):
                             # dotLottie spec often uses `path` like "animations/xxx.json"
-                            path = entry.get("path") or (entry.get("animation") or {}).get("path")
+                            path = entry.get("path") or (
+                                entry.get("animation") or {}
+                            ).get("path")
                             if isinstance(path, str) and path in zf.namelist():
                                 candidate_path = path
                                 break
@@ -49,7 +51,9 @@ def _load_dotlottie_animation_data(filepath: str) -> dict | None:
             if not candidate_path:
                 names = zf.namelist()
                 # Prefer files under animations/
-                anim_jsons = [n for n in names if n.endswith(".json") and "animations/" in n]
+                anim_jsons = [
+                    n for n in names if n.endswith(".json") and "animations/" in n
+                ]
                 if not anim_jsons:
                     anim_jsons = [n for n in names if n.endswith(".json")]
                 candidate_path = anim_jsons[0] if anim_jsons else None
@@ -80,7 +84,9 @@ def _load_lottie_any(filepath: str) -> dict | None:
         return None
 
 
-def _show_lottie_splash_streamlit(animation_data: dict, duration_ms: int = 5000) -> None:
+def _show_lottie_splash_streamlit(
+    animation_data: dict, duration_ms: int = 5000
+) -> None:
     """Show a splash using streamlit-lottie, then hide after a timeout.
 
     Uses a placeholder and blocks for a short duration before clearing.
@@ -92,6 +98,7 @@ def _show_lottie_splash_streamlit(animation_data: dict, duration_ms: int = 5000)
             # Render the animation large; adjust height as needed
             st_lottie(animation_data, height=800, key="startup-splash")
         import time
+
         time.sleep(max(0, int(duration_ms / 1000)))
         ph.empty()
 
@@ -105,7 +112,9 @@ def _read_file_base64(filepath: str) -> str | None:
         return None
 
 
-def _show_dotlottie_zip_splash_once(dotlottie_base64: str, background: str = "#000000", force_hide_after_ms: int = 6000) -> None:
+def _show_dotlottie_zip_splash_once(
+    dotlottie_base64: str, background: str = "#000000", force_hide_after_ms: int = 6000
+) -> None:
     """Render a full-screen splash using the official dotlottie player (zip-aware).
 
     Loads the .lottie zip via a data URI so embedded assets are preserved.
@@ -182,4 +191,3 @@ elif active_page == "Wallet":
     render_wallet_page()
 else:
     render_mcp_tools_page()
-

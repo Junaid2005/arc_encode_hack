@@ -1,4 +1,5 @@
 """Web3 helper utilities for the Streamlit frontend."""
+
 from __future__ import annotations
 
 import json
@@ -46,7 +47,9 @@ def load_contract_abi(abi_path: Optional[str]) -> Optional[list[dict[str, Any]]]
         return None
 
 
-def encode_contract_call(contract: Contract, fn_name: str, args: Sequence[Any] | None = None) -> str:
+def encode_contract_call(
+    contract: Contract, fn_name: str, args: Sequence[Any] | None = None
+) -> str:
     """Encode a contract function call, compatible with Web3.py v5/v6."""
     call_args = list(args or [])
 

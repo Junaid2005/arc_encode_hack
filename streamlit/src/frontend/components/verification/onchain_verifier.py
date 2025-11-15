@@ -21,12 +21,12 @@ from hypersync import (
 class OnChainVerifier:
     """
     On-chain wallet verification and analysis.
-    
+
     Fetches wallet transaction data from the blockchain using Hypersync and extracts
     key metrics including transaction count, total value moved, unique interactions,
     and wallet age.
     """
-    
+
     def __init__(self, chain: str = "ethereum"):
         # Using the provided token directly in the class
         self.api_key = "547eb877-5324-4821-8e51-bc71dcae2659"
@@ -79,20 +79,21 @@ class OnChainVerifier:
             if tx.value:
                 try:
                     # Value is a hex string, convert to int then to ETH
-                    value_wei = int(tx.value, 16) if tx.value.startswith('0x') else int(tx.value)
+                    value_wei = (
+                        int(tx.value, 16)
+                        if tx.value.startswith("0x")
+                        else int(tx.value)
+                    )
                     total_value_moved += value_wei / 1e18
                 except (ValueError, AttributeError):
                     pass
 
-        unique_interactions = len(
-            set(tx.to for tx in txs if tx.to)
-        )
+        unique_interactions = len(set(tx.to for tx in txs if tx.to))
 
         block_numbers = [tx.block_number for tx in txs if tx.block_number is not None]
         first_seen_block = min(block_numbers) if block_numbers else None
         wallet_age = (
-            (latest_block - first_seen_block) / 7200
-            if first_seen_block else 0
+            (latest_block - first_seen_block) / 7200 if first_seen_block else 0
         )  # approx days
 
         return {

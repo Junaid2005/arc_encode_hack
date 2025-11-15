@@ -66,10 +66,14 @@ def _resolve_abi_path() -> tuple[Optional[str], Optional[str], Optional[str]]:
 def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
     st.divider()
     st.subheader("Owner USDC Tools")
-    st.caption("Send USDC from the lending pool owner wallet on ARC or initiate a Circle CCTP bridge to another chain.")
+    st.caption(
+        "Send USDC from the lending pool owner wallet on ARC or initiate a Circle CCTP bridge to another chain."
+    )
 
     arc_rpc_url = os.getenv(config.ARC_RPC_ENV)
-    private_key = os.getenv(config.BRIDGE_PRIVATE_KEY_ENV) or os.getenv(config.PRIVATE_KEY_ENV)
+    private_key = os.getenv(config.BRIDGE_PRIVATE_KEY_ENV) or os.getenv(
+        config.PRIVATE_KEY_ENV
+    )
     private_key_source = None
     if os.getenv(config.BRIDGE_PRIVATE_KEY_ENV):
         private_key_source = config.BRIDGE_PRIVATE_KEY_ENV
@@ -85,11 +89,15 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
     if not arc_rpc_url:
         missing_envs.append(config.ARC_RPC_ENV)
     if not private_key:
-        missing_envs.append(f"{config.BRIDGE_PRIVATE_KEY_ENV} or {config.PRIVATE_KEY_ENV}")
+        missing_envs.append(
+            f"{config.BRIDGE_PRIVATE_KEY_ENV} or {config.PRIVATE_KEY_ENV}"
+        )
     if not lending_pool_address:
         missing_envs.append(lending_pool_env)
     if not abi_path:
-        missing_envs.append(f"{config.LENDING_POOL_ABI_PATH_ENV} (or compile LendingPool)")
+        missing_envs.append(
+            f"{config.LENDING_POOL_ABI_PATH_ENV} (or compile LendingPool)"
+        )
 
     if invalid_abi_path:
         st.warning(
@@ -107,7 +115,9 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         try:
             gas_limit = int(gas_limit_raw, 0)
         except ValueError:
-            st.warning(f"Unable to parse `{config.GAS_LIMIT_ENV}` = {gas_limit_raw}; using estimated gas.")
+            st.warning(
+                f"Unable to parse `{config.GAS_LIMIT_ENV}` = {gas_limit_raw}; using estimated gas."
+            )
 
     gas_price_wei: Optional[int] = None
     gas_price_raw = os.getenv(config.GAS_PRICE_GWEI_ENV)
@@ -115,14 +125,18 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         try:
             gas_price_wei = int(Decimal(gas_price_raw) * Decimal(1_000_000_000))
         except (InvalidOperation, ValueError):
-            st.warning(f"Unable to parse `{config.GAS_PRICE_GWEI_ENV}` = {gas_price_raw}; using network gas price.")
+            st.warning(
+                f"Unable to parse `{config.GAS_PRICE_GWEI_ENV}` = {gas_price_raw}; using network gas price."
+            )
 
     polygon_rpc_url = os.getenv(config.POLYGON_RPC_ENV) or os.getenv("POLYGON_RPC_URL")
     polygon_private_key = os.getenv(config.POLYGON_PRIVATE_KEY_ENV)
     auto_mint_configured = bool(polygon_rpc_url and polygon_private_key)
 
     polygon_address = _resolve_polygon_address(wallet_info)
-    arc_default_recipient = wallet_info.get("address") if isinstance(wallet_info, dict) else ""
+    arc_default_recipient = (
+        wallet_info.get("address") if isinstance(wallet_info, dict) else ""
+    )
 
     with st.expander("Connection details", expanded=False):
         st.markdown(f"**ARC RPC URL:** `{arc_rpc_url}`")
@@ -145,11 +159,15 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
             st.markdown("**Polygon auto-mint:** disabled (manual mint required)")
 
     st.markdown("### ARC Same-Chain Transfer")
-    transfer_state: Optional[Dict[str, Any]] = st.session_state.get(ARC_TRANSFER_SESSION_KEY)
+    transfer_state: Optional[Dict[str, Any]] = st.session_state.get(
+        ARC_TRANSFER_SESSION_KEY
+    )
 
     with st.form("arc_transfer_form"):
         default_recipient = arc_default_recipient or ""
-        recipient_input = st.text_input("ARC recipient address", value=default_recipient)
+        recipient_input = st.text_input(
+            "ARC recipient address", value=default_recipient
+        )
         amount_input = st.text_input("Amount to transfer (USDC)", value="0.10")
         submitted_arc = st.form_submit_button("Send USDC on ARC")
 
@@ -202,10 +220,14 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         st.info("Submit the form above to transfer USDC to another ARC wallet.")
 
     st.markdown("### Circle CCTP Bridge (ARC → Other Chains)")
-    st.caption("Use this section only when bridging from ARC to another supported chain via Circle CCTP.")
+    st.caption(
+        "Use this section only when bridging from ARC to another supported chain via Circle CCTP."
+    )
 
     if not polygon_address:
-        st.info("Connect a wallet above to populate the destination Polygon address before bridging.")
+        st.info(
+            "Connect a wallet above to populate the destination Polygon address before bridging."
+        )
         return
 
     bridge_state: Optional[Dict[str, Any]] = st.session_state.get(BRIDGE_SESSION_KEY)
@@ -253,7 +275,9 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
             bridge_state = result.to_state()
             st.session_state[BRIDGE_SESSION_KEY] = bridge_state
             if bridge_state.get("status") == "complete":
-                st.success("Circle attestation received. Continue with the Polygon mint step below.")
+                st.success(
+                    "Circle attestation received. Continue with the Polygon mint step below."
+                )
             else:
                 st.info(
                     "ARC transactions confirmed. Circle attestation is still pending — refresh below once finality is reached."
@@ -277,7 +301,9 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
 
     bridge_state = st.session_state.get(BRIDGE_SESSION_KEY)
     if not bridge_state:
-        st.info("Once the bridge transaction completes, this section will prepare the Polygon mint transaction.")
+        st.info(
+            "Once the bridge transaction completes, this section will prepare the Polygon mint transaction."
+        )
         return
 
     st.markdown("### Step 1 — ARC Transactions")
@@ -291,12 +317,12 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
     approve_hash = bridge_state.get("approve_tx_hash")
     approve_explorer = bridge_state.get("approve_tx_explorer")
     if approve_hash and approve_explorer:
-        st.markdown(
-            f"- **Allowance approval:** [`{approve_hash}`]({approve_explorer})"
-        )
+        st.markdown(f"- **Allowance approval:** [`{approve_hash}`]({approve_explorer})")
     attestation_url = bridge_state.get("attestation_url")
     if attestation_url:
-        st.markdown(f"- **Circle attestation API:** [{attestation_url}]({attestation_url})")
+        st.markdown(
+            f"- **Circle attestation API:** [{attestation_url}]({attestation_url})"
+        )
 
     st.markdown("### Step 2 — Mint USDC on Polygon PoS Amoy")
 
@@ -349,7 +375,10 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
             else:
                 updated_state = resume_result.to_state()
                 st.session_state[BRIDGE_SESSION_KEY] = updated_state
-                st.success("Circle attestation is ready. Continue with the Polygon mint step below.", icon="✅")
+                st.success(
+                    "Circle attestation is ready. Continue with the Polygon mint step below.",
+                    icon="✅",
+                )
                 if refresh_logs:
                     with st.expander("Bridge log", expanded=False):
                         st.code("\n".join(refresh_logs), language="text")
@@ -359,7 +388,9 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
     message_hex = bridge_state.get("message_hex")
     attestation_hex = bridge_state.get("attestation_hex")
     if not message_hex or not attestation_hex:
-        st.error("Attestation payload missing from bridge state. Refresh the attestation above.")
+        st.error(
+            "Attestation payload missing from bridge state. Refresh the attestation above."
+        )
         if st.button("Clear bridge session", key="clear_cctp_session_missing_payload"):
             st.session_state.pop(BRIDGE_SESSION_KEY, None)
             st.experimental_rerun()
@@ -419,7 +450,9 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         )
 
         if command and component_payload:
-            if component_payload.get("status") == "sent" and component_payload.get("txHash"):
+            if component_payload.get("status") == "sent" and component_payload.get(
+                "txHash"
+            ):
                 mint_hash = component_payload["txHash"]
                 polygon_logs.append(f"✔ mint transaction sent: {mint_hash}")
                 st.session_state["polygon_wallet_logs"] = polygon_logs
@@ -447,9 +480,13 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
             with st.expander("Polygon wallet log", expanded=True):
                 st.code("\n".join(polygon_logs), language="text")
         else:
-            st.info("No Polygon wallet events yet. Click the button above to send the transaction.")
+            st.info(
+                "No Polygon wallet events yet. Click the button above to send the transaction."
+            )
 
-    st.caption("You will need test MATIC on Polygon Amoy to submit the mint transaction.")
+    st.caption(
+        "You will need test MATIC on Polygon Amoy to submit the mint transaction."
+    )
 
     if st.button("Clear bridge session", key="clear_cctp_session"):
         st.session_state.pop(BRIDGE_SESSION_KEY, None)
@@ -460,7 +497,9 @@ def render_wallet_page() -> None:
     """Render the wallet connect page that bridges MetaMask to Streamlit."""
 
     st.title("🔐 Wallet Connect")
-    st.caption("Use your injected wallet (MetaMask, Rabby, etc.) directly inside Streamlit.")
+    st.caption(
+        "Use your injected wallet (MetaMask, Rabby, etc.) directly inside Streamlit."
+    )
 
     chain_id = _resolve_chain_id()
     if chain_id is None:

@@ -21,4 +21,3 @@ __all__ = [
     "WalletVerifier",
     "run_verification_flow",
 ]
-

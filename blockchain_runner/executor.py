@@ -47,7 +47,9 @@ def execute_commands(entries: Iterable[Tuple[str, str]]) -> None:
 
             print(f"→ {command}")
             log.write("\n" + "-" * 80 + "\n")
-            log.write(f"Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n")
+            log.write(
+                f"Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
+            )
             log.write(f"Working directory: {current_dir}\n")
             log.write(f"Command: {command}\n")
 
@@ -89,7 +91,9 @@ def execute_commands(entries: Iterable[Tuple[str, str]]) -> None:
                             f"{key} remains unset (placeholder provided: {value})",
                         )
                 else:
-                    log_section(log, "Result: set environment variable", f"{key}={value}")
+                    log_section(
+                        log, "Result: set environment variable", f"{key}={value}"
+                    )
                 continue
 
             env_vars = extract_env_vars(command)
@@ -147,6 +151,9 @@ def execute_commands(entries: Iterable[Tuple[str, str]]) -> None:
             log.write(stderr if stderr else "<empty>\n")
             log.flush()
 
-            status = "completed" if result.returncode == 0 else f"completed with exit code {result.returncode}"
+            status = (
+                "completed"
+                if result.returncode == 0
+                else f"completed with exit code {result.returncode}"
+            )
             print(f"← {status}. See {LOG_FILE} for details.")
-

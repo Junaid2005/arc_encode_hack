@@ -38,7 +38,7 @@ def parse_env_file(path: Path, env: Dict[str, str]) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip()
-        if (value.startswith("\"") and value.endswith("\"")) or (
+        if (value.startswith('"') and value.endswith('"')) or (
             value.startswith("'") and value.endswith("'")
         ):
             value = value[1:-1]
@@ -62,11 +62,13 @@ def resolve_env_value(name: str, env: Dict[str, str]) -> str | None:
     return None
 
 
-def set_environment_variable(env: Dict[str, str], assignment: str) -> tuple[str, str, bool]:
+def set_environment_variable(
+    env: Dict[str, str], assignment: str
+) -> tuple[str, str, bool]:
     key, _, value = assignment.partition("=")
     key = key.strip()
     value = value.strip()
-    if (value.startswith("\"") and value.endswith("\"")) or (
+    if (value.startswith('"') and value.endswith('"')) or (
         value.startswith("'") and value.endswith("'")
     ):
         value = value[1:-1]
@@ -75,4 +77,3 @@ def set_environment_variable(env: Dict[str, str], assignment: str) -> tuple[str,
         env[key] = value
         os.environ[key] = value
     return key, value, placeholder
-

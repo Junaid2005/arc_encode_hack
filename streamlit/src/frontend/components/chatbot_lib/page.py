@@ -69,10 +69,14 @@ def render_chatbot_page() -> None:
         return
 
     attachment_context = (
-        build_attachment_context(attachments, clip_len) if (attachments and include_attachments) else ""
+        build_attachment_context(attachments, clip_len)
+        if (attachments and include_attachments)
+        else ""
     )
     composed_prompt = (
-        f"{prompt}\n\n[Attached documents]\n{attachment_context}" if attachment_context else prompt
+        f"{prompt}\n\n[Attached documents]\n{attachment_context}"
+        if attachment_context
+        else prompt
     )
 
     append_message("user", composed_prompt)
@@ -84,9 +88,7 @@ def render_chatbot_page() -> None:
                     st.write(f"- {getattr(f, 'name', 'document')}")
 
     if client is None:
-        fallback = (
-            "Azure OpenAI credentials are missing. Configure them to receive generated responses, or review the Intro page."
-        )
+        fallback = "Azure OpenAI credentials are missing. Configure them to receive generated responses, or review the Intro page."
         append_message("assistant", fallback)
         with st.chat_message("assistant"):
             st.markdown(fallback)
@@ -120,7 +122,9 @@ def render_chatbot_page() -> None:
     if sbt_address and sbt_abi_path:
         sbt_abi = load_contract_abi(sbt_abi_path)
         try:
-            sbt_contract = w3.eth.contract(address=Web3.to_checksum_address(sbt_address), abi=sbt_abi)
+            sbt_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(sbt_address), abi=sbt_abi
+            )
             sbt_tools_schema, sbt_function_map = build_llm_toolkit(
                 w3=w3,
                 contract=sbt_contract,
@@ -143,7 +147,9 @@ def render_chatbot_page() -> None:
         pool_abi = load_contract_abi(pool_abi_path)
         usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
         try:
-            pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
+            pool_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(pool_address), abi=pool_abi
+            )
             pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
                 w3=w3,
                 pool_contract=pool_contract,
@@ -170,10 +176,18 @@ def render_chatbot_page() -> None:
         with st.chat_message("assistant"):
             with st_lottie_spinner(waves, key="waves_spinner"):
                 run_mcp_llm_conversation(
-                    client, deployment, st.session_state.messages, tools_schema, function_map
+                    client,
+                    deployment,
+                    st.session_state.messages,
+                    tools_schema,
+                    function_map,
                 )
     else:
         with st.spinner("GPT 5 is orchestrating MCP tools…"):
             run_mcp_llm_conversation(
-                client, deployment, st.session_state.messages, tools_schema, function_map
+                client,
+                deployment,
+                st.session_state.messages,
+                tools_schema,
+                function_map,
             )

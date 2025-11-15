@@ -85,9 +85,13 @@ def next_nonce(w3: Web3, addr: str) -> int:
 def sign_and_send(w3: Web3, private_key: str, tx: Dict[str, Any]) -> Dict[str, Any]:
     try:
         signed = w3.eth.account.sign_transaction(tx, private_key=private_key)
-        raw_tx = getattr(signed, "rawTransaction", None) or getattr(signed, "raw_transaction", None)
+        raw_tx = getattr(signed, "rawTransaction", None) or getattr(
+            signed, "raw_transaction", None
+        )
         if raw_tx is None:
-            return {"error": "Signed transaction missing rawTransaction/raw_transaction"}
+            return {
+                "error": "Signed transaction missing rawTransaction/raw_transaction"
+            }
         local_hash = Web3.keccak(raw_tx).hex()
         try:
             tx_hash = w3.eth.send_raw_transaction(raw_tx)
@@ -120,7 +124,9 @@ def format_receipt(receipt: Any) -> dict[str, Any]:
     if receipt is None:
         return {"status": "pending"}
     return {
-        "transactionHash": receipt["transactionHash"].hex() if receipt.get("transactionHash") else None,
+        "transactionHash": (
+            receipt["transactionHash"].hex() if receipt.get("transactionHash") else None
+        ),
         "status": receipt.get("status"),
         "blockNumber": receipt.get("blockNumber"),
         "gasUsed": receipt.get("gasUsed"),
@@ -129,7 +135,11 @@ def format_receipt(receipt: Any) -> dict[str, Any]:
 
 
 def _extract_revert_reason(w3: Web3, tx: Dict[str, Any], receipt: Any) -> Optional[str]:
-    block_number = receipt.get("blockNumber") if isinstance(receipt, dict) else getattr(receipt, "blockNumber", None)
+    block_number = (
+        receipt.get("blockNumber")
+        if isinstance(receipt, dict)
+        else getattr(receipt, "blockNumber", None)
+    )
     if block_number is None:
         return None
 
@@ -138,7 +148,14 @@ def _extract_revert_reason(w3: Web3, tx: Dict[str, Any], receipt: Any) -> Option
         for key in ("nonce", "gas", "gasPrice", "maxFeePerGas", "maxPriorityFeePerGas"):
             call_tx.pop(key, None)
         call_tx.setdefault("from", tx.get("from"))
-        call_tx.setdefault("to", receipt.get("to") if isinstance(receipt, dict) else getattr(receipt, "to", None))
+        call_tx.setdefault(
+            "to",
+            (
+                receipt.get("to")
+                if isinstance(receipt, dict)
+                else getattr(receipt, "to", None)
+            ),
+        )
         w3.eth.call(call_tx, block_identifier=block_number)
     except Exception as exc:  # expected: call will raise with revert data
         data_hex = None
@@ -147,7 +164,11 @@ def _extract_revert_reason(w3: Web3, tx: Dict[str, Any], receipt: Any) -> Option
             if isinstance(arg0, dict) and "data" in arg0:
                 data_hex = arg0.get("data")
         message = str(exc)
-        if not message or message in {"execution reverted", "execution reverted: no data", "('execution reverted', 'no data')"}:
+        if not message or message in {
+            "execution reverted",
+            "execution reverted: no data",
+            "('execution reverted', 'no data')",
+        }:
             message = ""  # empty to allow fallback formatting later
         if data_hex is None:
             if "data" in message and "0x" in message:
@@ -187,7 +208,7 @@ def _decode_custom_error(data_hex: Optional[str]) -> Optional[str]:
     for typ in types:
         if offset + 32 > len(data):
             return f"{name}(malformed)"
-        word = data[offset:offset + 32]
+        word = data[offset : offset + 32]
         if typ == "address":
             value = "0x" + word[-20:].hex()
         else:
@@ -224,4 +245,3 @@ def metamask_tx_request(
         except Exception:
             req["from"] = from_address
     return req
-
