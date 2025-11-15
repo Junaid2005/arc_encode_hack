@@ -1,4 +1,4 @@
-# TrustMint — Identity‑based Lending on Arc (SBT + Pool MVP)
+# TrustMint — Identity‑based Lending on Arc (SBT + Pool MVP) hello
 
 A credit‑infrastructure MVP on Arc that lets underserved creators and SMBs access stable‑coin loans using a verifiable on‑chain credential and a unified credit score from on‑chain + off‑chain data.
 

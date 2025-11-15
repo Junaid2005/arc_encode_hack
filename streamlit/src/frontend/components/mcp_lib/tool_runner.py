@@ -7,9 +7,14 @@ from typing import Any, Callable, Dict, Optional
 import streamlit as st
 from web3 import Web3
 
-from ..wallet import DEFAULT_SESSION_KEY
+from ..session import DEFAULT_SESSION_KEY
 from ..wallet_connect_component import wallet_command
+from .logging_utils import get_metamask_logger
+from .rerun import st_rerun
 from .wallet_section import render_wallet_section
+
+
+METAMASK_LOGGER = get_metamask_logger()
 
 
 def _normalise_chain_id(value: Any) -> Optional[int]:
@@ -61,11 +66,15 @@ def render_tool_runner(
     selected = selection_map[selected_display]
 
     required_role = (tool_role_map or {}).get(selected)
+    role_private_keys = role_private_keys or {}
+    requires_signature_role = bool(required_role and required_role != "Read-only")
+    has_env_signer = bool(role_private_keys.get(required_role)) if required_role else False
+    requires_metamask_wallet = requires_signature_role and not has_env_signer
     if required_role:
         if required_role == "Read-only":
             st.caption("This call is read-only and does not require a signature.")
         else:
-            pk_available = bool((role_private_keys or {}).get(required_role))
+            pk_available = bool(role_private_keys.get(required_role))
             addr = (role_addresses or {}).get(required_role)
             if pk_available:
                 st.caption(f"Signing will use the {required_role} private key from .env.")
@@ -204,29 +213,68 @@ def render_tool_runner(
     if not isinstance(auto_connect_state, dict):
         auto_connect_state = {}
 
-    needs_connection = expected_chain_id is not None and not wallet_connected
-    if needs_connection:
-        pending_connect = bool(auto_connect_state.get("pending"))
-        if not auto_connect_state.get("attempted"):
-            _append_log("⚠ Auto-requesting MetaMask connection. Choose MetaMask in the provider prompt.")
-            sequence = int(time() * 1000)
-            auto_connect_state["attempted"] = True
-            auto_connect_state["pending"] = True
-            auto_connect_state["sequence"] = sequence
-            st.session_state[auto_connect_state_key] = auto_connect_state
-            pending_connect = True
-        sequence = auto_connect_state.get("sequence")
+    connect_button_key = f"{key_prefix}_connect_wallet_{selected}"
+    pending_connect = bool(auto_connect_state.get("pending"))
+    connect_sequence = auto_connect_state.get("sequence")
+    if pending_connect and not auto_connect_state.get("logged"):
+        stored_reason = auto_connect_state.get("reason") or "MetaMask connection command pending (restored state)."
+        METAMASK_LOGGER.info(
+            "MetaMask popup (connect) for MCP tool '%s'. Reason: %s.",
+            selected,
+            stored_reason,
+        )
+        auto_connect_state["logged"] = True
+        st.session_state[auto_connect_state_key] = auto_connect_state
+
+    if requires_metamask_wallet and not wallet_connected:
+        st.warning(
+            "Connect your MetaMask wallet to continue. If a provider selection window appears, choose MetaMask."
+        )
+        if not pending_connect:
+            if st.button("Connect MetaMask", key=connect_button_key):
+                connect_sequence = int(time() * 1000)
+                reason = (
+                    f"role '{required_role}' requires MetaMask signer"
+                    if required_role
+                    else "tool requires MetaMask signer"
+                )
+                auto_connect_state = {
+                    "attempted": True,
+                    "pending": True,
+                    "sequence": connect_sequence,
+                    "reason": reason,
+                    "logged": False,
+                }
+                st.session_state[auto_connect_state_key] = auto_connect_state
+                pending_connect = True
+                _append_log("⚠ Requesting MetaMask connection. Approve the request in MetaMask.")
+                METAMASK_LOGGER.info(
+                    "MetaMask popup (connect) for MCP tool '%s'. Reason: %s.",
+                    selected,
+                    reason,
+                )
+                auto_connect_state["logged"] = True
+                st.session_state[auto_connect_state_key] = auto_connect_state
+        else:
+            st.info("Waiting for MetaMask connection…")
+    else:
+        if auto_connect_state_key in st.session_state:
+            st.session_state.pop(auto_connect_state_key, None)
+        pending_connect = False
+        connect_sequence = None
+
+    if pending_connect and connect_sequence is not None:
         connect_payload = wallet_command(
             key=f"wallet_auto_connect_{key_prefix}_{selected}",
-            command="connect" if pending_connect else None,
-            command_sequence=sequence,
+            command="connect",
+            command_sequence=connect_sequence,
             require_chain_id=expected_chain_id,
             preferred_address=str(preferred_address) if preferred_address else None,
             autoconnect=True,
         )
         if isinstance(connect_payload, dict):
             _append_log(f"(info) MetaMask payload: {connect_payload}")
-            if pending_connect and connect_payload.get("commandSequence") == sequence:
+            if connect_payload.get("commandSequence") == connect_sequence:
                 auto_connect_state["pending"] = False
                 st.session_state[auto_connect_state_key] = auto_connect_state
             payload_error = connect_payload.get("error")
@@ -257,19 +305,30 @@ def render_tool_runner(
                 _append_log(f"(info) MetaMask status: {payload_status}")
         elif connect_payload is not None:
             _append_log(f"(info) MetaMask payload: {connect_payload}")
-    else:
-        if auto_connect_state_key in st.session_state:
-            st.session_state.pop(auto_connect_state_key, None)
 
     if current_chain_id is None:
         current_chain_id = _normalise_chain_id(mm_state.get("wallet_chain"))
     if current_chain_id is None and isinstance(status_payload, dict):
         current_chain_id = _normalise_chain_id(status_payload.get("chainId"))
     chain_mismatch = (
-        expected_chain_id is not None
+        requires_metamask_wallet
+        and expected_chain_id is not None
         and current_chain_id is not None
         and current_chain_id != expected_chain_id
     )
+
+    switch_button_key = f"{key_prefix}_switch_network_{selected}"
+    pending_switch = bool(auto_switch_state.get("pending"))
+    switch_sequence = auto_switch_state.get("sequence")
+    if pending_switch and not auto_switch_state.get("logged"):
+        stored_reason = auto_switch_state.get("reason") or "MetaMask network switch pending (restored state)."
+        METAMASK_LOGGER.info(
+            "MetaMask popup (switch_network) for MCP tool '%s'. Reason: %s.",
+            selected,
+            stored_reason,
+        )
+        auto_switch_state["logged"] = True
+        st.session_state[auto_switch_state_key] = auto_switch_state
 
     if wallet_connected and chain_mismatch:
         required_hex = f"0x{expected_chain_id:x}" if expected_chain_id is not None else "unknown"
@@ -280,72 +339,96 @@ def render_tool_runner(
         st.caption(
             "MetaMask should prompt for a network change. Approve the switch to continue."
         )
-        if not auto_switch_state.get("attempted"):
-            if expected_chain_id is not None:
-                _append_log(
-                    f"⚠ Auto-requesting MetaMask network switch to ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
+        if not pending_switch:
+            if st.button("Switch MetaMask to ARC", key=switch_button_key):
+                switch_sequence = int(time() * 1000)
+                reason = (
+                    f"wallet on chain {current_chain_id}; expected {expected_chain_id}"
+                    if expected_chain_id is not None and current_chain_id is not None
+                    else "wallet network mismatch"
                 )
-            else:
-                _append_log("⚠ Auto-requesting MetaMask network switch to configured chain.")
-            sequence = int(time() * 1000)
-            auto_switch_state["attempted"] = True
-            auto_switch_state["pending"] = True
-            auto_switch_state["sequence"] = sequence
-            st.session_state[auto_switch_state_key] = auto_switch_state
-        pending_switch = bool(auto_switch_state.get("pending"))
-        sequence = auto_switch_state.get("sequence")
-        switch_payload = wallet_command(
-            key=f"wallet_auto_switch_{key_prefix}_{selected}",
-            command="switch_network" if pending_switch else None,
-            command_sequence=sequence,
-            require_chain_id=expected_chain_id,
-            command_payload={"require_chain_id": expected_chain_id} if expected_chain_id is not None else None,
-            preferred_address=str(preferred_address) if preferred_address else None,
-            autoconnect=True,
-        )
-        if isinstance(switch_payload, dict):
-            _append_log(f"(info) MetaMask payload: {switch_payload}")
-            if pending_switch and switch_payload.get("commandSequence") == sequence:
-                auto_switch_state["pending"] = False
+                auto_switch_state = {
+                    "attempted": True,
+                    "pending": True,
+                    "sequence": switch_sequence,
+                    "reason": reason,
+                    "logged": False,
+                }
                 st.session_state[auto_switch_state_key] = auto_switch_state
-            result_chain = _normalise_chain_id(switch_payload.get("chainId"))
-            if result_chain is not None:
-                current_chain_id = result_chain
-                mm_state["wallet_chain"] = result_chain
-                st.session_state[mm_state_key] = mm_state
-                st.session_state.setdefault(DEFAULT_SESSION_KEY, {})
-                if isinstance(st.session_state[DEFAULT_SESSION_KEY], dict):
-                    st.session_state[DEFAULT_SESSION_KEY]["chainId"] = result_chain
-            status_msg = switch_payload.get("status")
-            error_msg = switch_payload.get("error")
-            if result_chain == expected_chain_id:
+                pending_switch = True
                 _append_log(
-                    f"✔ Wallet switched to ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
+                    f"⚠ Requesting MetaMask network switch to ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
+                    if expected_chain_id is not None
+                    else "⚠ Requesting MetaMask network switch to configured chain."
                 )
-                chain_mismatch = False
-                st.session_state.pop(auto_switch_state_key, None)
-            elif result_chain is not None and expected_chain_id is not None:
-                _append_log(
-                    f"! MetaMask reported switch to chain {result_chain} (0x{result_chain:x}); still expecting ARC {expected_chain_id} (0x{expected_chain_id:x})."
+                METAMASK_LOGGER.info(
+                    "MetaMask popup (switch_network) for MCP tool '%s'. Reason: %s.",
+                    selected,
+                    reason,
                 )
-            if status_msg:
-                st.info(f"MetaMask status: {status_msg}")
-                _append_log(f"(info) MetaMask status: {status_msg}")
-            if error_msg:
-                st.warning(f"MetaMask reported: {error_msg}")
-                _append_log(f"✖ MetaMask network switch error: {error_msg}")
-        elif switch_payload is not None:
-            _append_log(f"! Unexpected MetaMask response: {switch_payload}")
+                auto_switch_state["logged"] = True
+                st.session_state[auto_switch_state_key] = auto_switch_state
+        else:
+            st.info("Waiting for MetaMask network switch…")
+
+        if pending_switch and switch_sequence is not None:
+            switch_payload = wallet_command(
+                key=f"wallet_auto_switch_{key_prefix}_{selected}",
+                command="switch_network",
+                command_sequence=switch_sequence,
+                require_chain_id=expected_chain_id,
+                command_payload={"require_chain_id": expected_chain_id} if expected_chain_id is not None else None,
+                preferred_address=str(preferred_address) if preferred_address else None,
+                autoconnect=True,
+            )
+            if isinstance(switch_payload, dict):
+                _append_log(f"(info) MetaMask payload: {switch_payload}")
+                if switch_payload.get("commandSequence") == switch_sequence:
+                    auto_switch_state["pending"] = False
+                    st.session_state[auto_switch_state_key] = auto_switch_state
+                result_chain = _normalise_chain_id(switch_payload.get("chainId"))
+                if result_chain is not None:
+                    current_chain_id = result_chain
+                    mm_state["wallet_chain"] = result_chain
+                    st.session_state[mm_state_key] = mm_state
+                    st.session_state.setdefault(DEFAULT_SESSION_KEY, {})
+                    if isinstance(st.session_state[DEFAULT_SESSION_KEY], dict):
+                        st.session_state[DEFAULT_SESSION_KEY]["chainId"] = result_chain
+                status_msg = switch_payload.get("status")
+                error_msg = switch_payload.get("error")
+                if result_chain == expected_chain_id:
+                    _append_log(
+                        f"✔ Wallet switched to ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
+                    )
+                    chain_mismatch = False
+                    st.session_state.pop(auto_switch_state_key, None)
+                elif result_chain is not None and expected_chain_id is not None:
+                    _append_log(
+                        f"! MetaMask reported switch to chain {result_chain} (0x{result_chain:x}); still expecting ARC {expected_chain_id} (0x{expected_chain_id:x})."
+                    )
+                if status_msg:
+                    st.info(f"MetaMask status: {status_msg}")
+                    _append_log(f"(info) MetaMask status: {status_msg}")
+                if error_msg:
+                    st.warning(f"MetaMask reported: {error_msg}")
+                    _append_log(f"✖ MetaMask network switch error: {error_msg}")
+            elif switch_payload is not None:
+                _append_log(f"! Unexpected MetaMask response: {switch_payload}")
     else:
         if auto_switch_state_key in st.session_state:
             st.session_state.pop(auto_switch_state_key, None)
 
-    if expected_chain_id is not None and wallet_connected and current_chain_id == expected_chain_id:
+    if (
+        requires_metamask_wallet
+        and expected_chain_id is not None
+        and wallet_connected
+        and current_chain_id == expected_chain_id
+    ):
         _append_log(
             f"✔ Wallet ready on ARC chain {expected_chain_id} (0x{expected_chain_id:x})."
         )
 
-    if expected_chain_id is not None and not wallet_connected:
+    if requires_metamask_wallet and expected_chain_id is not None and not wallet_connected:
         st.warning(
             "Connect your MetaMask wallet to continue. If a provider selection window appears, choose MetaMask."
         )
@@ -356,7 +439,7 @@ def render_tool_runner(
         st.info("Complete the wallet action above or clear the MetaMask state before running the tool again.")
         if st.button("Clear MetaMask state", key=f"{mm_state_key}_clear"):
             st.session_state.pop(mm_state_key, None)
-            st.experimental_rerun()
+            st_rerun()
         return
 
     schema = next(item for item in tools_schema if item["function"]["name"] == selected)
@@ -395,9 +478,9 @@ def render_tool_runner(
                 key=widget_key,
             )
 
-    disable_run = chain_mismatch or (expected_chain_id is not None and not wallet_connected)
+    disable_run = chain_mismatch or (requires_metamask_wallet and not wallet_connected)
     if st.button("Run MCP tool", key=f"{key_prefix}_run_tool", disabled=disable_run):
-        if expected_chain_id is not None and not wallet_connected:
+        if requires_metamask_wallet and not wallet_connected:
             st.error("Connect your MetaMask wallet on the ARC network before running this tool.")
             return
         if chain_mismatch:

@@ -13,6 +13,41 @@ from .tx_helpers import fee_params, next_nonce, sign_and_send
 from ..config import PRIVATE_KEY_ENV
 
 
+_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+
+def _has_sbt(w3: Web3, contract: Contract, checksum_wallet: str) -> bool:
+    try:
+        has_fn = getattr(contract.functions, "hasSbt", None)
+        if has_fn is not None:
+            return bool(has_fn(checksum_wallet).call())
+    except Exception:
+        pass
+    try:
+        tid_fn = getattr(contract.functions, "tokenIdOf", None)
+        token_id = int(tid_fn(checksum_wallet).call()) if tid_fn else int(checksum_wallet, 16)
+        owner_fn = getattr(contract.functions, "ownerOf", None)
+        if owner_fn is None:
+            fb = w3.eth.contract(
+                address=contract.address,
+                abi=[
+                    {
+                        "name": "ownerOf",
+                        "type": "function",
+                        "stateMutability": "view",
+                        "inputs": [{"name": "tokenId", "type": "uint256"}],
+                        "outputs": [{"name": "", "type": "address"}],
+                    }
+                ],
+            )
+            owner = fb.functions.ownerOf(token_id).call()
+        else:
+            owner = owner_fn(token_id).call()
+        return owner not in (None, _ZERO_ADDRESS)
+    except Exception:
+        return False
+
+
 def build_llm_toolkit(
     *,
     w3: Web3,
@@ -179,24 +214,6 @@ def build_llm_toolkit(
         except Exception:
             return None
 
-    def _preflight_has_sbt(addr: str) -> bool:
-        try:
-            has_fn = getattr(contract.functions, "hasSbt", None)
-            if has_fn is not None:
-                return bool(has_fn(addr).call())
-        except Exception:
-            pass
-        # fallback
-        try:
-            tid = int(getattr(contract.functions, "tokenIdOf", None)(addr).call()) if hasattr(contract.functions, "tokenIdOf") else int(addr, 16)
-            owner_fn = getattr(contract.functions, "ownerOf", None)
-            if owner_fn is not None:
-                o = owner_fn(tid).call()
-                return o not in (None, "0x0000000000000000000000000000000000000000")
-        except Exception:
-            return False
-        return False
-
     def issueScore_tool(wallet_address: str, score_value: int) -> str:
         if not derived_private_key:
             return tool_error("PRIVATE_KEY not configured. Configure it in .env to submit transactions.")
@@ -299,7 +316,7 @@ def build_llm_toolkit(
         if msg:
             return tool_error(msg)
         # Preflight: ensure SBT is minted to avoid revert
-        if not _preflight_has_sbt(checksum_wallet):
+        if not _has_sbt(w3, contract, checksum_wallet):
             return tool_error("SBT not minted for this wallet; revokeScore would revert.")
         try:
             fees = fee_params(w3, gas_price_gwei)
@@ -365,4 +382,20 @@ def build_llm_toolkit(
     )
 
     return tools, handlers
+
+
+def build_sbt_guard(
+    w3: Web3,
+    contract: Contract,
+) -> Callable[[str], Optional[str]]:
+    def guard(wallet_address: str) -> Optional[str]:
+        try:
+            checksum_wallet = Web3.to_checksum_address(wallet_address)
+        except ValueError:
+            return "Borrower wallet address is invalid."
+        if _has_sbt(w3, contract, checksum_wallet):
+            return None
+        return "Borrower must hold the required TrustMint SBT credential before requesting this action."
+
+    return guard
 

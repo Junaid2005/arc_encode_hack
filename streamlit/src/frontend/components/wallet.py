@@ -17,9 +17,8 @@ from .cctp_bridge import (
     resume_arc_to_polygon_bridge,
 )
 from .wallet_connect_component import connect_wallet, wallet_command
-
-
-DEFAULT_SESSION_KEY = "connected_wallet_info"
+from .mcp_lib.rerun import st_rerun
+from .session import DEFAULT_SESSION_KEY
 ARC_CHAIN_ID_ENV = "ARC_CHAIN_ID"
 BRIDGE_SESSION_KEY = "cctp_bridge_result"
 ARC_TRANSFER_SESSION_KEY = "arc_transfer_result"
@@ -197,7 +196,7 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         )
         if st.button("Clear transfer session", key="clear_arc_transfer"):
             st.session_state.pop(ARC_TRANSFER_SESSION_KEY, None)
-            st.experimental_rerun()
+            st_rerun()
     else:
         st.info("Submit the form above to transfer USDC to another ARC wallet.")
 
@@ -353,7 +352,7 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
                 if refresh_logs:
                     with st.expander("Bridge log", expanded=False):
                         st.code("\n".join(refresh_logs), language="text")
-                st.experimental_rerun()
+                st_rerun()
         return
 
     message_hex = bridge_state.get("message_hex")
@@ -362,7 +361,7 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
         st.error("Attestation payload missing from bridge state. Refresh the attestation above.")
         if st.button("Clear bridge session", key="clear_cctp_session_missing_payload"):
             st.session_state.pop(BRIDGE_SESSION_KEY, None)
-            st.experimental_rerun()
+            st_rerun()
         return
 
     with st.expander("Message & attestation payload", expanded=False):
@@ -453,7 +452,7 @@ def _render_cctp_bridge(wallet_info: Optional[Dict[str, Any]]) -> None:
 
     if st.button("Clear bridge session", key="clear_cctp_session"):
         st.session_state.pop(BRIDGE_SESSION_KEY, None)
-        st.experimental_rerun()
+        st_rerun()
 
 
 def render_wallet_page() -> None:

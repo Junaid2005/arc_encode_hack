@@ -7,9 +7,13 @@ from typing import Any, Dict, Optional
 import streamlit as st
 from web3 import Web3
 
-from ..wallet import DEFAULT_SESSION_KEY
+from ..session import DEFAULT_SESSION_KEY
 from ..wallet_connect_component import wallet_command
+from .logging_utils import get_metamask_logger
 from .rerun import st_rerun
+
+
+METAMASK_LOGGER = get_metamask_logger()
 
 
 def _normalise_chain_id(value: Any) -> Optional[int]:
@@ -57,6 +61,18 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
     mm_state.setdefault("last_value", None)
 
     pending = mm_state.get("pending_command")
+    if isinstance(pending, dict) and pending.get("command") and not pending.get("logged"):
+        stored_reason = pending.get("reason") or "MetaMask command pending (restored state)."
+        METAMASK_LOGGER.info(
+            "MetaMask popup (%s) for MCP bridge '%s/%s'. Reason: %s.",
+            pending.get("command"),
+            key_prefix,
+            selected,
+            stored_reason,
+        )
+        pending["logged"] = True
+        mm_state["pending_command"] = pending
+        st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
     component_key = f"wallet_headless_{key_prefix}_{selected}"
     command = pending.get("command") if isinstance(pending, dict) else None
     command_payload = pending.get("payload") if isinstance(pending, dict) else None
@@ -125,8 +141,17 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
                 "command": "switch_network",
                 "payload": {"require_chain_id": required_chain_id},
                 "sequence": sequence,
+                "reason": f"wallet chain {wallet_chain_id} != required {required_chain_id}",
+                "logged": False,
             }
             mm_state["_auto_switch_attempted"] = True
+            METAMASK_LOGGER.info(
+                "MetaMask popup (switch_network) for MCP bridge '%s/%s'. Reason: wallet chain %s, required chain %s (auto attempt).",
+                key_prefix,
+                selected,
+                wallet_chain_id,
+                required_chain_id,
+            )
             st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
             st_rerun()
         required_hex = f"0x{required_chain_id:x}"
@@ -159,7 +184,14 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
             "command": "connect",
             "payload": {},
             "sequence": int(time() * 1000),
+            "reason": "user clicked Connect wallet button",
+            "logged": False,
         }
+        METAMASK_LOGGER.info(
+            "MetaMask popup (connect) for MCP bridge '%s/%s'. Reason: user clicked Connect wallet button.",
+            key_prefix,
+            selected,
+        )
         st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
         st_rerun()
 
@@ -168,7 +200,14 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
             "command": "switch_network",
             "payload": {"require_chain_id": chain_id},
             "sequence": int(time() * 1000),
+            "reason": f"user requested switch to chain {chain_id}",
+            "logged": False,
         }
+        METAMASK_LOGGER.info(
+            "MetaMask popup (switch_network) for MCP bridge '%s/%s'. Reason: user clicked Switch network button.",
+            key_prefix,
+            selected,
+        )
         st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
         st_rerun()
 
@@ -178,7 +217,14 @@ def render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, s
             "command": "send_transaction",
             "payload": {"tx_request": tx_req, "action": action},
             "sequence": int(time() * 1000),
+            "reason": "user clicked Send transaction button",
+            "logged": False,
         }
+        METAMASK_LOGGER.info(
+            "MetaMask popup (send_transaction) for MCP bridge '%s/%s'. Reason: user clicked Send transaction button.",
+            key_prefix,
+            selected,
+        )
         st.session_state[f"mm_state_{key_prefix}_{selected}"] = mm_state
         st_rerun()
 

@@ -77,6 +77,7 @@ export default function WalletConnect(): JSX.Element {
   const txLabel = (renderData.args?.["tx_label"] as string | undefined) ?? undefined
   const preferredAddress = renderData.args?.["preferred_address"] as string | undefined
   const autoConnect = !!renderData.args?.["autoconnect"]
+  const autoSubmit = !!renderData.args?.["auto_submit"]
   const mode = (renderData.args?.["mode"] as string | undefined) ?? "interactive"
   const command = renderData.args?.["command"] as string | undefined
   const commandPayload = renderData.args?.["command_payload"] as any
@@ -357,6 +358,41 @@ export default function WalletConnect(): JSX.Element {
   )
 
   const lastCommandRef = useRef<number | undefined>()
+  const autoSubmitRef = useRef<boolean>(false)
+
+  // Auto-submit transaction when autoSubmit is enabled and txRequest is provided
+  useEffect(() => {
+    if (!autoSubmit || !txRequest || sending || autoSubmitRef.current) {
+      return
+    }
+    // Check if wallet is connected
+    if (!info.isConnected && !info.address) {
+      console.log('[WalletConnect] Auto-submit waiting for wallet connection')
+      return
+    }
+    // Check if chain matches
+    if (chainMismatch) {
+      console.log('[WalletConnect] Auto-submit waiting for chain switch')
+      return
+    }
+    
+    console.log('[WalletConnect] Auto-submitting transaction to MetaMask...')
+    autoSubmitRef.current = true
+    
+    // Small delay to ensure UI is ready
+    const timer = setTimeout(() => {
+      console.log('[WalletConnect] Triggering sendTransaction()')
+      sendTransaction()
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [autoSubmit, txRequest, info.isConnected, info.address, chainMismatch, sending, sendTransaction])
+
+  // Reset auto-submit ref when txRequest changes or is cleared
+  useEffect(() => {
+    if (!txRequest) {
+      autoSubmitRef.current = false
+    }
+  }, [txRequest])
 
   useEffect(() => {
     if (mode !== "headless") {
