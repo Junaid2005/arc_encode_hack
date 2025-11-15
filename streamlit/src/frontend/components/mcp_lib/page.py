@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 from decimal import Decimal, InvalidOperation
@@ -35,8 +36,11 @@ from ..cctp_bridge import (
     transfer_arc_usdc,
 )
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit
+from ..verification.score_calculator import wallet_summary_to_score
+from ..verification.verification_flow import run_verification_flow
 from ..wallet_connect_component import connect_wallet, wallet_command
 from ..web3_utils import get_web3_client, load_contract_abi
+from .rerun import st_rerun
 from .tool_runner import render_tool_runner
 
 LOGGER_NAME = "arc.mcp_polygon"
@@ -811,6 +815,260 @@ def _render_cctp_bridge_section(role_addresses: Dict[str, str], wallet_info: Opt
         st.experimental_rerun()
 
 
+def _render_verification_section() -> None:
+    """Render the verification input section with form and results display."""
+    st.divider()
+    st.subheader("🔍 User Verification")
+    st.caption("Enter user information to run through the complete verification flow.")
+    
+    # Session state key for storing verification results
+    verification_results_key = "verification_results"
+    
+    # Form for user input
+    with st.form("verification_form", clear_on_submit=False):
+        st.markdown("### User Information")
+        
+        wallet_address = st.text_input(
+            "Wallet Address *",
+            value="",
+            help="Required: Ethereum wallet address to verify",
+            key="verification_wallet_address"
+        ).strip()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            full_name = st.text_input(
+                "Full Name",
+                value="",
+                help="Optional: User's full name (contributes to score)",
+                key="verification_full_name"
+            ).strip()
+            
+            email = st.text_input(
+                "Email",
+                value="",
+                help="Optional: Email address",
+                key="verification_email"
+            ).strip()
+        
+        with col2:
+            phone = st.text_input(
+                "Phone",
+                value="",
+                help="Optional: Phone number",
+                key="verification_phone"
+            ).strip()
+            
+            social_link = st.text_input(
+                "Social Link",
+                value="",
+                help="Optional: GitHub, LinkedIn, or other social profile URL",
+                key="verification_social_link"
+            ).strip()
+        
+        uploaded_files = st.file_uploader(
+            "Upload Files",
+            type=["pdf", "png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+            help="Optional: Upload documents (PDF, PNG, JPEG) - files must be > 20 KB",
+            key="verification_uploaded_files"
+        )
+        
+        submitted = st.form_submit_button("Run Verification", type="primary")
+    
+    # Handle form submission
+    if submitted:
+        if not wallet_address:
+            st.error("❌ Wallet address is required. Please enter a wallet address.")
+            return
+        
+        # Validate wallet address format (basic check)
+        if not wallet_address.startswith("0x") or len(wallet_address) != 42:
+            st.error("❌ Invalid wallet address format. Please enter a valid Ethereum address (0x...).")
+            return
+        
+        # Prepare user data
+        user_data = {
+            "wallet_address": wallet_address,
+            "full_name": full_name if full_name else None,
+            "email": email if email else None,
+            "phone": phone if phone else None,
+            "social_link": social_link if social_link else None,
+            "uploaded_files": list(uploaded_files) if uploaded_files else None,
+        }
+        
+        # Run verification flow
+        with st.spinner("🔄 Running verification flow... This may take a moment."):
+            try:
+                results = asyncio.run(run_verification_flow(user_data))
+                st.session_state[verification_results_key] = results
+            except Exception as e:
+                st.error(f"❌ Verification failed: {str(e)}")
+                st.session_state[verification_results_key] = {
+                    "errors": [f"Verification error: {str(e)}"]
+                }
+    
+    # Display results if available
+    results = st.session_state.get(verification_results_key)
+    if results:
+        st.divider()
+        st.markdown("### Verification Results")
+        
+        # Display errors if any
+        if results.get("errors"):
+            st.error("❌ Errors occurred during verification:")
+            for error in results["errors"]:
+                st.error(f"  • {error}")
+        
+        # Wallet Verification Results
+        wallet_verification = results.get("wallet_verification")
+        if wallet_verification:
+            with st.expander("🔍 Wallet Verification", expanded=True):
+                if wallet_verification.get("valid_format"):
+                    st.success("✅ Wallet format is valid")
+                else:
+                    st.error(f"❌ Invalid wallet format: {wallet_verification.get('reason', 'Unknown error')}")
+                
+                if wallet_verification.get("active_onchain"):
+                    st.success("✅ Wallet has on-chain activity")
+                else:
+                    st.warning(f"⚠️ No on-chain activity: {wallet_verification.get('reason', 'Unknown')}")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(wallet_verification)
+        
+        # On-chain Verification Results
+        onchain_verification = results.get("onchain_verification")
+        if onchain_verification:
+            with st.expander("⛓️ On-chain Verification", expanded=True):
+                # Calculate on-chain score from wallet summary
+                onchain_score = wallet_summary_to_score(onchain_verification)
+                
+                # Display on-chain score prominently
+                st.metric("On-chain Trust Score", f"{onchain_score:.2f}/100")
+                
+                st.divider()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Transactions", onchain_verification.get("tx_count", 0))
+                
+                with col2:
+                    st.metric(
+                        "Value Moved (ETH)",
+                        f"{onchain_verification.get('total_value_moved', 0):.4f}"
+                    )
+                
+                with col3:
+                    st.metric(
+                        "Unique Interactions",
+                        onchain_verification.get("unique_interactions", 0)
+                    )
+                
+                with col4:
+                    st.metric(
+                        "Wallet Age (days)",
+                        f"{onchain_verification.get('wallet_age_days', 0):.1f}"
+                    )
+                
+                # Liquidation information
+                liquidations = onchain_verification.get("liquidations", {})
+                if liquidations.get("count", 0) > 0:
+                    st.warning(
+                        f"⚠️ {liquidations.get('count')} liquidation(s) detected. "
+                        f"Total amount: ${liquidations.get('totalAmountUSD', 0):.2f}"
+                    )
+                else:
+                    st.success("✅ No liquidations detected")
+                
+                with st.expander("Detailed On-chain Data", expanded=False):
+                    st.json(onchain_verification)
+        
+        # Off-chain Verification Results
+        offchain_verification = results.get("offchain_verification")
+        if offchain_verification:
+            with st.expander("📋 Off-chain Verification", expanded=True):
+                total_offchain = offchain_verification.get("total_offchain_score", 0)
+                st.metric("Off-chain Score", f"{total_offchain}/100")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Component Scores:**")
+                    st.write(f"• Document Upload: {offchain_verification.get('document_upload_score', 0)}/20")
+                    st.write(f"• Email Quality: {offchain_verification.get('email_quality_score', 0)}/40")
+                    st.write(f"• Phone Format: {offchain_verification.get('phone_format_score', 0)}/20")
+                
+                with col2:
+                    st.write("**Additional Scores:**")
+                    st.write(f"• Real Name: {offchain_verification.get('real_name_score', 0)}/10")
+                    st.write(f"• Social Link: {offchain_verification.get('social_link_score', 0)}/10")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(offchain_verification)
+        
+        # Score Calculation Results
+        score_calculation = results.get("score_calculation")
+        if score_calculation:
+            with st.expander("📊 Score Calculation", expanded=True):
+                final_score = score_calculation.get("final_score", 0)
+                on_chain_score = score_calculation.get("on_chain_score", 0)
+                off_chain_score = score_calculation.get("off_chain_score", 0)
+                
+                # Display final score prominently
+                st.metric("Final Trust Score", f"{final_score}/100")
+                
+                # Score breakdown
+                st.write("**Score Breakdown:**")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"• On-chain Score: {on_chain_score}/100")
+                    st.write(f"• Off-chain Score: {off_chain_score}/100")
+                
+                with col2:
+                    # Calculate weighted values for display (85% on-chain, 15% off-chain)
+                    weighted_onchain = on_chain_score * 0.85
+                    weighted_offchain = off_chain_score * 0.15
+                    st.write(f"• Weighted On-chain (85%): {weighted_onchain:.2f}")
+                    st.write(f"• Weighted Off-chain (15%): {weighted_offchain:.2f}")
+                
+                with st.expander("Detailed Score Data", expanded=False):
+                    st.json(score_calculation)
+        
+        # Eligibility Check Results
+        eligibility_check = results.get("eligibility_check")
+        if eligibility_check:
+            with st.expander("✅ Eligibility Check", expanded=True):
+                is_eligible = eligibility_check.get("eligible", False)
+                
+                if is_eligible:
+                    st.success("✅ User is ELIGIBLE for credit")
+                    amount_usdc = eligibility_check.get("amount_usdc", 0)
+                    st.metric("Eligible Loan Amount", f"${amount_usdc:,} USDC")
+                else:
+                    st.error("❌ User is NOT ELIGIBLE for credit")
+                
+                st.write(f"**Reason:** {eligibility_check.get('reason', 'N/A')}")
+                
+                # Display factors applied
+                factors_applied = eligibility_check.get("factors_applied", [])
+                if factors_applied:
+                    st.write("**Factors Applied:**")
+                    for factor in factors_applied:
+                        st.write(f"• {factor}")
+                
+                with st.expander("Details", expanded=False):
+                    st.json(eligibility_check)
+        
+        # Clear results button
+        if st.button("Clear Results", key="clear_verification_results"):
+            st.session_state.pop(verification_results_key, None)
+            st_rerun()
+
+
 def render_mcp_tools_page() -> None:
     st.title("🧪 Direct MCP Tool Tester")
     st.caption("Run MCP tools for TrustMintSBT and LendingPool.")
@@ -872,6 +1130,9 @@ def render_mcp_tools_page() -> None:
     with info_col:
         st.caption("Stored role addresses")
         st.json(role_addresses)
+
+    # User Verification Section
+    _render_verification_section()
 
     owner_pk = os.getenv(PRIVATE_KEY_ENV)
     lender_pk = os.getenv("LENDER_PRIVATE_KEY")

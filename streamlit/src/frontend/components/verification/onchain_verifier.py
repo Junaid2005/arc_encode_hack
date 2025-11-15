@@ -339,6 +339,7 @@ class OnChainVerifier:
                 except Exception as e:
                     continue
             
+            
             # Process AbsorbDebt events
             for log in logs_debt:
                 try:

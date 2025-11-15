@@ -117,20 +117,32 @@ def render_chatbot_page() -> None:
     sbt_abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
     sbt_tools_schema: list[Dict[str, Any]] = []
     sbt_function_map: Dict[str, Any] = {}
+    sbt_error: str | None = None
+    
     if sbt_address and sbt_abi_path:
-        sbt_abi = load_contract_abi(sbt_abi_path)
         try:
-            sbt_contract = w3.eth.contract(address=Web3.to_checksum_address(sbt_address), abi=sbt_abi)
-            sbt_tools_schema, sbt_function_map = build_llm_toolkit(
-                w3=w3,
-                contract=sbt_contract,
-                token_decimals=0,
-                private_key=private_key,
-                default_gas_limit=default_gas_limit,
-                gas_price_gwei=gas_price_gwei,
-            )
-        except Exception:
-            pass
+            sbt_abi = load_contract_abi(sbt_abi_path)
+            if not sbt_abi:
+                sbt_error = f"ABI file loaded but contains no ABI data: {sbt_abi_path}"
+            else:
+                try:
+                    sbt_contract = w3.eth.contract(address=Web3.to_checksum_address(sbt_address), abi=sbt_abi)
+                    sbt_tools_schema, sbt_function_map = build_llm_toolkit(
+                        w3=w3,
+                        contract=sbt_contract,
+                        token_decimals=0,
+                        private_key=private_key,
+                        default_gas_limit=default_gas_limit,
+                        gas_price_gwei=gas_price_gwei,
+                    )
+                except ValueError as e:
+                    sbt_error = f"Invalid SBT contract address: {e}"
+                except Exception as e:
+                    sbt_error = f"Failed to build SBT toolkit: {e}"
+        except (FileNotFoundError, ValueError) as e:
+            sbt_error = str(e)
+        except Exception as e:
+            sbt_error = f"Unexpected error loading SBT ABI: {e}"
 
     pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
     pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
@@ -139,28 +151,108 @@ def render_chatbot_page() -> None:
     usdc_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
     pool_tools_schema: list[Dict[str, Any]] = []
     pool_function_map: Dict[str, Any] = {}
+    pool_error: str | None = None
+    
     if pool_address and pool_abi_path:
-        pool_abi = load_contract_abi(pool_abi_path)
-        usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
         try:
-            pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
-            pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
-                w3=w3,
-                pool_contract=pool_contract,
-                token_decimals=usdc_decimals,
-                native_decimals=18,
-                private_key=private_key,
-                default_gas_limit=default_gas_limit,
-                gas_price_gwei=gas_price_gwei,
-            )
-        except Exception:
-            pass
+            pool_abi = load_contract_abi(pool_abi_path)
+            if not pool_abi:
+                pool_error = f"ABI file loaded but contains no ABI data: {pool_abi_path}"
+            else:
+                usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
+                try:
+                    pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
+                    pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
+                        w3=w3,
+                        pool_contract=pool_contract,
+                        token_decimals=usdc_decimals,
+                        native_decimals=18,
+                        private_key=private_key,
+                        default_gas_limit=default_gas_limit,
+                        gas_price_gwei=gas_price_gwei,
+                    )
+                except ValueError as e:
+                    pool_error = f"Invalid LendingPool contract address: {e}"
+                except Exception as e:
+                    pool_error = f"Failed to build LendingPool toolkit: {e}"
+        except (FileNotFoundError, ValueError) as e:
+            pool_error = str(e)
+        except Exception as e:
+            pool_error = f"Unexpected error loading LendingPool ABI: {e}"
 
     tools_schema = sbt_tools_schema + pool_tools_schema
     function_map = {**sbt_function_map, **pool_function_map}
 
     if not tools_schema:
-        st.warning("No MCP tools are available for the current contract configuration.")
+        missing_config = []
+        if not sbt_address:
+            missing_config.append(f"`{SBT_ADDRESS_ENV}`")
+        if not sbt_abi_path:
+            missing_config.append(f"`{TRUSTMINT_SBT_ABI_PATH_ENV}`")
+        if not pool_address:
+            missing_config.append(f"`{LENDING_POOL_ADDRESS_ENV}`")
+        if not pool_abi_path:
+            missing_config.append(f"`{LENDING_POOL_ABI_PATH_ENV}`")
+        
+        error_details = []
+        if sbt_error:
+            error_details.append(f"**SBT Tools Error:** {sbt_error}")
+        if pool_error:
+            error_details.append(f"**LendingPool Tools Error:** {pool_error}")
+        
+        with st.container():
+            st.warning("**No MCP tools are available for the current contract configuration.**")
+            
+            if missing_config:
+                st.markdown("### Missing Environment Variables")
+                st.markdown("Set the following in your `.env` file at the repository root:")
+                for var in missing_config:
+                    st.code(f"{var}=your_value_here", language="bash")
+                
+                # Check if ABI path is missing and provide compilation instructions
+                needs_abi = any(TRUSTMINT_SBT_ABI_PATH_ENV in var or LENDING_POOL_ABI_PATH_ENV in var for var in missing_config)
+                if needs_abi:
+                    st.markdown("**Note:** ABI files need to be generated by compiling your contracts.")
+                    st.markdown("**Install Foundry (if not installed):**")
+                    st.code("curl -L https://foundry.paradigm.xyz | bash\nfoundryup", language="bash")
+                    st.markdown("**Compile contracts:**")
+                    st.code("cd blockchain_code && forge build", language="bash")
+                    st.markdown("This will generate ABI files in `blockchain_code/out/` directory.")
+                    st.info("📖 See `SETUP_MCP.md` for detailed setup instructions.")
+                
+                st.markdown("**Example `.env` configuration:**")
+                st.code(f"""# TrustMint SBT Contract
+{SBT_ADDRESS_ENV}=0xYourSBTContractAddress
+{TRUSTMINT_SBT_ABI_PATH_ENV}=blockchain_code/out/TrustMintSBT.sol/TrustMintSBT.json
+
+# LendingPool Contract (optional)
+{LENDING_POOL_ADDRESS_ENV}=0xYourLendingPoolAddress
+{LENDING_POOL_ABI_PATH_ENV}=blockchain_code/out/LendingPool.sol/LendingPool.json
+{USDC_ADDRESS_ENV}=0xYourUSDCAddress
+{USDC_ABI_PATH_ENV}=blockchain_code/out/USDC.sol/USDC.json
+
+# RPC Configuration
+{ARC_RPC_ENV}=https://your-arc-rpc-url
+{PRIVATE_KEY_ENV}=0xYourPrivateKey""", language="bash")
+            
+            if error_details:
+                st.markdown("### Configuration Errors")
+                for detail in error_details:
+                    st.error(detail)
+                    # Provide specific help for FileNotFoundError
+                    if "not found" in detail.lower() or "file not found" in detail.lower():
+                        st.info("💡 **Tip:** Run `cd blockchain_code && forge build` to generate ABI files. See `SETUP_MCP.md` for full instructions.")
+            
+            if not missing_config and not error_details:
+                st.info("Contract addresses and ABI paths are set, but no tools were generated. Check that the ABI files exist and contain valid contract ABIs.")
+                st.markdown("**Verify:**")
+                st.code("""# Check if ABI files exist
+ls -la blockchain_code/out/TrustMintSBT.sol/TrustMintSBT.json
+ls -la blockchain_code/out/LendingPool.sol/LendingPool.json
+
+# If missing, compile contracts
+cd blockchain_code && forge build""", language="bash")
+        
         return
 
     waves = load_lottie_json(WAVES_PATH)
