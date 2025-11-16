@@ -61,7 +61,6 @@ def auto_execute_pending_tx() -> None:
                 }
             }, 300);
         }, 500);  // Initial delay to let DOM settle
-    })();
     </script>
     <div style="display:none">AutoTX Active</div>
     """

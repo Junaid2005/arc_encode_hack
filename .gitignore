@@ -24,6 +24,7 @@ __pycache__/
 ## Node/Frontend build artifacts
 node_modules/
 **/*.tsbuildinfo
+**/build/**
 
 ## Virtual environments
 venv/
