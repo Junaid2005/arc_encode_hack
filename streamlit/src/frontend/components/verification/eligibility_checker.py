@@ -15,7 +15,7 @@ class EligibilityChecker:
 
     # Placeholder constants (easy to update later)
     MAX_LOAN_AMOUNT_USDC = 10_000  # Maximum loan amount in USDC
-    MIN_TRUST_SCORE = 40  # Minimum trust score threshold (0-100)
+    MIN_TRUST_SCORE = 0  # Allow all scores by default
 
     # Tiered bracket percentages
     TIER_HIGH = (80, 100, 1.0)  # 80-100: 100% of max
@@ -71,15 +71,6 @@ class EligibilityChecker:
         """
         factors_applied = []
 
-        # Check minimum threshold
-        if trust_score < self.min_trust_score:
-            return {
-                "eligible": False,
-                "amount_usdc": 0,
-                "reason": f"Trust score {trust_score} below minimum threshold of {self.min_trust_score}",
-                "factors_applied": factors_applied,
-            }
-
         # Determine base amount from tiered brackets
         base_percentage = 0.0
         tier_name = ""
@@ -93,6 +84,10 @@ class EligibilityChecker:
         elif self.TIER_LOW[0] <= trust_score <= self.TIER_LOW[1]:
             base_percentage = self.TIER_LOW[2]
             tier_name = "Low (40-59)"
+        else:
+            # Extremely low scores still receive a starter tier so the flow never blocks
+            base_percentage = 0.1  # 10% of max as a fallback
+            tier_name = "Starter (0-39)"
 
         base_amount = self.max_loan_amount_usdc * base_percentage
         factors_applied.append(
