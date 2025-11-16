@@ -90,33 +90,31 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         )
         handlers[name] = handler
 
-    def prepare_borrower_bridge_tool(
-        polygon_address: str, amount: str
-    ) -> str:
+    def prepare_borrower_bridge_tool(polygon_address: str, amount: str) -> str:
         """Prepare a MetaMask transaction for borrower to bridge their own USDC."""
-        
+
         arc_rpc_url = os.getenv(ARC_RPC_ENV)
         if not arc_rpc_url:
             return tool_error("ARC RPC URL not configured.")
-        
+
         gas_limit = _parse_int(os.getenv(GAS_LIMIT_ENV))
         gas_price_wei = _parse_gas_price(os.getenv(GAS_PRICE_GWEI_ENV))
-        
+
         try:
             amount_dec, amount_base_units = _parse_usdc_amount(amount)
         except BridgeError as exc:
             return tool_error(str(exc))
-        
+
         if not Web3.is_address(polygon_address):
             return tool_error("Invalid Polygon address.")
         polygon_checksum = Web3.to_checksum_address(polygon_address)
-        
+
         try:
             w3 = _init_web3(arc_rpc_url)
             chain_id = w3.eth.chain_id
         except BridgeError as exc:
             return tool_error(str(exc))
-        
+
         usdc = w3.eth.contract(
             address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI
         )
@@ -124,28 +122,29 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
             address=Web3.to_checksum_address(TOKEN_MESSENGER_ADDRESS),
             abi=TOKEN_MESSENGER_ABI,
         )
-        
+
         # Build the approve transaction for USDC
         # Directly encode without any simulation
         from eth_abi import encode
-        
+
         # Function selector for approve(address,uint256)
         approve_selector = Web3.keccak(text="approve(address,uint256)")[:4]
         approve_params = encode(
-            ['address', 'uint256'],
-            [TOKEN_MESSENGER_ADDRESS, amount_base_units]
+            ["address", "uint256"], [TOKEN_MESSENGER_ADDRESS, amount_base_units]
         )
         approve_tx_data = "0x" + approve_selector.hex() + approve_params.hex()
-        
+
         # Build the depositForBurn transaction
         max_fee_base_units = amount_base_units - DEFAULT_MAX_FEE_BUFFER
         if max_fee_base_units <= 0:
             max_fee_base_units = 1
-        
+
         # Function selector for depositForBurn
-        burn_selector = Web3.keccak(text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)")[:4]
+        burn_selector = Web3.keccak(
+            text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)"
+        )[:4]
         burn_params = encode(
-            ['uint256', 'uint32', 'bytes32', 'address', 'bytes32', 'uint256', 'uint32'],
+            ["uint256", "uint32", "bytes32", "address", "bytes32", "uint256", "uint32"],
             [
                 amount_base_units,
                 POLYGON_DOMAIN_ID,
@@ -153,11 +152,11 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 Web3.to_checksum_address(ARC_USDC_ADDRESS),
                 bytes(32),
                 max_fee_base_units,
-                DEFAULT_MIN_FINALITY
-            ]
+                DEFAULT_MIN_FINALITY,
+            ],
         )
         burn_tx_data = "0x" + burn_selector.hex() + burn_params.hex()
-        
+
         # Store bridge details in session for later reference
         bridge_state = {
             "amount_usdc": format(amount_dec, "f"),
@@ -166,34 +165,36 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
             "status": "pending_approval",
         }
         st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-        
+
         # Return the transaction data in the format that triggers MetaMask
         # The conversation.py handler will detect the metamask field and trigger the popup
-        return tool_success({
-            "bridge": bridge_state,
-            "metamask": {
-                "tx_request": {
-                    "to": ARC_USDC_ADDRESS,
-                    "data": approve_tx_data,
+        return tool_success(
+            {
+                "bridge": bridge_state,
+                "metamask": {
+                    "tx_request": {
+                        "to": ARC_USDC_ADDRESS,
+                        "data": approve_tx_data,
+                    },
+                    "action": "eth_sendTransaction",
+                    "chainId": chain_id,
+                    "hint": f"Approve USDC spending ({amount_dec} USDC)",
                 },
-                "action": "eth_sendTransaction",
-                "chainId": chain_id,
-                "hint": f"Approve USDC spending ({amount_dec} USDC)",
-            },
-            "message": (
-                f"Triggering MetaMask for CCTP bridge:\n"
-                f"1. First popup: Approve USDC spending ({amount_dec} USDC)\n"
-                f"2. After approval, you'll need to call the bridge transaction\n\n"
-                f"The approve popup should appear now."
-            ),
-            "next_step": {
-                "burn_tx": {
-                    "to": TOKEN_MESSENGER_ADDRESS,
-                    "data": burn_tx_data,
-                    "hint": f"Bridge {amount_dec} USDC to Polygon",
-                }
+                "message": (
+                    f"Triggering MetaMask for CCTP bridge:\n"
+                    f"1. First popup: Approve USDC spending ({amount_dec} USDC)\n"
+                    f"2. After approval, you'll need to call the bridge transaction\n\n"
+                    f"The approve popup should appear now."
+                ),
+                "next_step": {
+                    "burn_tx": {
+                        "to": TOKEN_MESSENGER_ADDRESS,
+                        "data": burn_tx_data,
+                        "hint": f"Bridge {amount_dec} USDC to Polygon",
+                    }
+                },
             }
-        })
+        )
 
     register(
         "prepareBorrowerBridge",
@@ -214,30 +215,34 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         },
         prepare_borrower_bridge_tool,
     )
-    
+
     def execute_borrower_burn_tool() -> str:
         """Execute the burn transaction after approval."""
         bridge_state = st.session_state.get(MCP_BORROWER_BRIDGE_SESSION_KEY)
         if not bridge_state:
-            return tool_error("No bridge session found. Call prepareBorrowerBridge first.")
-        
+            return tool_error(
+                "No bridge session found. Call prepareBorrowerBridge first."
+            )
+
         polygon_address = bridge_state.get("polygon_address")
         amount_dec = Decimal(bridge_state.get("amount_usdc", "0"))
         amount_base_units = bridge_state.get("amount_base_units", 0)
-        
+
         if not polygon_address:
             return tool_error("No polygon address in bridge state.")
-        
+
         # Build the depositForBurn transaction data
         from eth_abi import encode
-        
+
         max_fee_base_units = amount_base_units - DEFAULT_MAX_FEE_BUFFER
         if max_fee_base_units <= 0:
             max_fee_base_units = 1
-        
-        burn_selector = Web3.keccak(text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)")[:4]
+
+        burn_selector = Web3.keccak(
+            text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)"
+        )[:4]
         burn_params = encode(
-            ['uint256', 'uint32', 'bytes32', 'address', 'bytes32', 'uint256', 'uint32'],
+            ["uint256", "uint32", "bytes32", "address", "bytes32", "uint256", "uint32"],
             [
                 amount_base_units,
                 POLYGON_DOMAIN_ID,
@@ -245,30 +250,32 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 Web3.to_checksum_address(ARC_USDC_ADDRESS),
                 bytes(32),
                 max_fee_base_units,
-                DEFAULT_MIN_FINALITY
-            ]
+                DEFAULT_MIN_FINALITY,
+            ],
         )
         burn_tx_data = "0x" + burn_selector.hex() + burn_params.hex()
-        
+
         # Update bridge state
         bridge_state["status"] = "pending_burn"
         st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-        
+
         # Return in format that triggers MetaMask
-        return tool_success({
-            "bridge": bridge_state,
-            "metamask": {
-                "tx_request": {
-                    "to": TOKEN_MESSENGER_ADDRESS,
-                    "data": burn_tx_data,
+        return tool_success(
+            {
+                "bridge": bridge_state,
+                "metamask": {
+                    "tx_request": {
+                        "to": TOKEN_MESSENGER_ADDRESS,
+                        "data": burn_tx_data,
+                    },
+                    "action": "eth_sendTransaction",
+                    "chainId": 5042002,  # ARC testnet
+                    "hint": f"Execute CCTP bridge ({amount_dec} USDC to Polygon)",
                 },
-                "action": "eth_sendTransaction",
-                "chainId": 5042002,  # ARC testnet
-                "hint": f"Execute CCTP bridge ({amount_dec} USDC to Polygon)",
-            },
-            "message": f"Now executing the CCTP bridge to burn {amount_dec} USDC and send to Polygon. Please approve the transaction."
-        })
-    
+                "message": f"Now executing the CCTP bridge to burn {amount_dec} USDC and send to Polygon. Please approve the transaction.",
+            }
+        )
+
     register(
         "executeBorrowerBurn",
         "Execute the CCTP burn transaction after USDC approval.",
@@ -276,76 +283,90 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         lambda: execute_borrower_burn_tool(),
     )
 
-    def check_borrower_usdc_balance_tool(borrower_address: Optional[str] = None, borrower_wallet_address: Optional[str] = None) -> str:
+    def check_borrower_usdc_balance_tool(
+        borrower_address: Optional[str] = None,
+        borrower_wallet_address: Optional[str] = None,
+    ) -> str:
         """Check borrower's USDC balance on ARC."""
         # Accept both parameter names for compatibility
         address = borrower_address or borrower_wallet_address
         if not address:
             return tool_error("Borrower address is required.")
-        
+
         arc_rpc_url = os.getenv(ARC_RPC_ENV)
         if not arc_rpc_url:
             return tool_error("ARC RPC URL not configured.")
-        
+
         if not Web3.is_address(address):
             return tool_error("Invalid borrower address.")
         borrower_checksum = Web3.to_checksum_address(address)
-        
+
         try:
             w3 = _init_web3(arc_rpc_url)
         except BridgeError as exc:
             return tool_error(str(exc))
-        
+
         usdc = w3.eth.contract(
             address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI
         )
-        
+
         try:
             balance = usdc.functions.balanceOf(borrower_checksum).call()
-            balance_decimal = Decimal(balance) / Decimal(10 ** 6)  # USDC has 6 decimals
-            
-            return tool_success({
-                "borrower": borrower_checksum,
-                "usdc_balance": balance,
-                "usdc_balance_human": format(balance_decimal, "f"),
-            })
+            balance_decimal = Decimal(balance) / Decimal(10**6)  # USDC has 6 decimals
+
+            return tool_success(
+                {
+                    "borrower": borrower_checksum,
+                    "usdc_balance": balance,
+                    "usdc_balance_human": format(balance_decimal, "f"),
+                }
+            )
         except Exception as exc:
             return tool_error(f"Failed to check balance: {exc}")
 
-    def check_usdc_allowance_tool(owner_address: Optional[str] = None, spender_address: Optional[str] = None) -> str:
+    def check_usdc_allowance_tool(
+        owner_address: Optional[str] = None, spender_address: Optional[str] = None
+    ) -> str:
         """Check USDC allowance for TokenMessenger."""
         address = owner_address
         if not address:
             return tool_error("Owner address is required.")
-        
+
         arc_rpc_url = os.getenv(ARC_RPC_ENV)
         if not arc_rpc_url:
             return tool_error("ARC RPC URL not configured.")
-        
+
         try:
             w3 = _init_web3(arc_rpc_url)
         except BridgeError as exc:
             return tool_error(str(exc))
-        
+
         usdc = w3.eth.contract(
             address=Web3.to_checksum_address(ARC_USDC_ADDRESS), abi=ERC20_ABI
         )
-        
+
         spender = spender_address or TOKEN_MESSENGER_ADDRESS
-        
+
         try:
             owner_checksum = Web3.to_checksum_address(address)
             spender_checksum = Web3.to_checksum_address(spender)
-            allowance = usdc.functions.allowance(owner_checksum, spender_checksum).call()
-            allowance_decimal = Decimal(allowance) / Decimal(10 ** 6)  # USDC has 6 decimals
-            
-            return tool_success({
-                "owner": owner_checksum,
-                "spender": spender_checksum,
-                "allowance": allowance,
-                "allowance_human": format(allowance_decimal, "f"),
-                "is_token_messenger": spender_checksum.lower() == TOKEN_MESSENGER_ADDRESS.lower(),
-            })
+            allowance = usdc.functions.allowance(
+                owner_checksum, spender_checksum
+            ).call()
+            allowance_decimal = Decimal(allowance) / Decimal(
+                10**6
+            )  # USDC has 6 decimals
+
+            return tool_success(
+                {
+                    "owner": owner_checksum,
+                    "spender": spender_checksum,
+                    "allowance": allowance,
+                    "allowance_human": format(allowance_decimal, "f"),
+                    "is_token_messenger": spender_checksum.lower()
+                    == TOKEN_MESSENGER_ADDRESS.lower(),
+                }
+            )
         except Exception as exc:
             return tool_error(f"Failed to check allowance: {exc}")
 
@@ -368,7 +389,7 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         },
         check_usdc_allowance_tool,
     )
-    
+
     register(
         "checkBorrowerUsdcBalance",
         "Check the borrower's USDC balance on ARC chain.",
@@ -417,20 +438,24 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         """Store the burn transaction hash after borrower executes bridge."""
         if not burn_tx_hash:
             return tool_error("Burn transaction hash is required.")
-        
+
         burn_hash_normalized = _normalise_tx_hash(burn_tx_hash)
-        
+
         # Update bridge state with burn tx
         bridge_state = st.session_state.get(MCP_BORROWER_BRIDGE_SESSION_KEY, {})
         bridge_state["burn_tx_hash"] = burn_hash_normalized
-        bridge_state["burn_tx_explorer"] = ARC_TX_EXPLORER_TEMPLATE.format(tx_hash=burn_hash_normalized)
+        bridge_state["burn_tx_explorer"] = ARC_TX_EXPLORER_TEMPLATE.format(
+            tx_hash=burn_hash_normalized
+        )
         bridge_state["status"] = "burn_complete_awaiting_attestation"
         st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-        
-        return tool_success({
-            "bridge": bridge_state,
-            "message": "Burn transaction recorded. Now polling for Circle attestation..."
-        })
+
+        return tool_success(
+            {
+                "bridge": bridge_state,
+                "message": "Burn transaction recorded. Now polling for Circle attestation...",
+            }
+        )
 
     register(
         "storeBorrowerBurnTx",
@@ -453,15 +478,17 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         bridge_state = st.session_state.get(MCP_BORROWER_BRIDGE_SESSION_KEY)
         if not bridge_state:
             return tool_error("No bridge session found.")
-        
+
         burn_tx_hash = bridge_state.get("burn_tx_hash")
         if not burn_tx_hash:
-            return tool_error("No burn transaction hash found. Call storeBorrowerBurnTx first.")
-        
+            return tool_error(
+                "No burn transaction hash found. Call storeBorrowerBurnTx first."
+            )
+
         arc_rpc_url = os.getenv(ARC_RPC_ENV)
         if not arc_rpc_url:
             return tool_error("ARC RPC URL not configured.")
-        
+
         logs: List[str] = []
         try:
             # Poll for attestation
@@ -472,39 +499,45 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
                 timeout=30,  # Quick check, don't wait too long
                 log=lambda msg: logs.append(str(msg)),
             )
-            
+
             message_hex = _ensure_hex_bytes(message, "message")
             attestation_hex = _ensure_hex_bytes(attestation, "attestation")
-            
+
             # Generate the Polygon mint call data
             w3 = _init_web3(arc_rpc_url)
-            call_data = _encode_receive_message_call_data(w3, message_hex, attestation_hex)
-            
+            call_data = _encode_receive_message_call_data(
+                w3, message_hex, attestation_hex
+            )
+
             # Update bridge state
             bridge_state["message_hex"] = message_hex
             bridge_state["attestation_hex"] = attestation_hex
             bridge_state["receive_message_call_data"] = call_data
             bridge_state["status"] = "ready_to_mint"
             st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-            
-            return tool_success({
-                "bridge": bridge_state,
-                "attestation_ready": True,
-                "message": "Attestation received! Ready to mint on Polygon.",
-                **_bridge_logs_payload(logs)
-            })
-            
+
+            return tool_success(
+                {
+                    "bridge": bridge_state,
+                    "attestation_ready": True,
+                    "message": "Attestation received! Ready to mint on Polygon.",
+                    **_bridge_logs_payload(logs),
+                }
+            )
+
         except BridgeError as exc:
             # Attestation not ready yet
             bridge_state["status"] = "waiting_for_attestation"
             st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-            
-            return tool_success({
-                "bridge": bridge_state,
-                "attestation_ready": False,
-                "message": f"Attestation not ready yet: {exc}. Keep polling...",
-                **_bridge_logs_payload(logs)
-            })
+
+            return tool_success(
+                {
+                    "bridge": bridge_state,
+                    "attestation_ready": False,
+                    "message": f"Attestation not ready yet: {exc}. Keep polling...",
+                    **_bridge_logs_payload(logs),
+                }
+            )
 
     register(
         "pollBorrowerAttestation",
@@ -518,35 +551,39 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         bridge_state = st.session_state.get(MCP_BORROWER_BRIDGE_SESSION_KEY)
         if not bridge_state:
             return tool_error("No bridge session found.")
-        
+
         call_data = bridge_state.get("receive_message_call_data")
         if not call_data:
-            return tool_error("No mint call data available. Poll for attestation first.")
-        
+            return tool_error(
+                "No mint call data available. Poll for attestation first."
+            )
+
         polygon_address = bridge_state.get("polygon_address")
         amount_usdc = bridge_state.get("amount_usdc")
-        
+
         # Update status
         bridge_state["status"] = "pending_polygon_mint"
         st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-        
-        return tool_success({
-            "bridge": bridge_state,
-            "metamask": {
-                "tx_request": {
-                    "to": MESSAGE_TRANSMITTER_ADDRESS,
-                    "data": call_data,
+
+        return tool_success(
+            {
+                "bridge": bridge_state,
+                "metamask": {
+                    "tx_request": {
+                        "to": MESSAGE_TRANSMITTER_ADDRESS,
+                        "data": call_data,
+                    },
+                    "action": "eth_sendTransaction",
+                    "chainId": POLYGON_AMOY_CHAIN_ID,
+                    "hint": f"Mint {amount_usdc} USDC on Polygon",
+                    "from": polygon_address,
                 },
-                "action": "eth_sendTransaction",
-                "chainId": POLYGON_AMOY_CHAIN_ID,
-                "hint": f"Mint {amount_usdc} USDC on Polygon",
-                "from": polygon_address,
-            },
-            "message": (
-                f"Ready to mint {amount_usdc} USDC on Polygon!\n"
-                f"Please switch to Polygon network and approve the transaction in MetaMask."
-            ),
-        })
+                "message": (
+                    f"Ready to mint {amount_usdc} USDC on Polygon!\n"
+                    f"Please switch to Polygon network and approve the transaction in MetaMask."
+                ),
+            }
+        )
 
     register(
         "preparePolygonMintForBorrower",
@@ -560,25 +597,29 @@ def build_borrower_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any
         bridge_state = st.session_state.get(MCP_BORROWER_BRIDGE_SESSION_KEY)
         if not bridge_state:
             return tool_error("No bridge session found.")
-        
+
         if mint_tx_hash:
             bridge_state["mint_tx_hash"] = mint_tx_hash
-            bridge_state["mint_tx_explorer"] = f"https://amoy.polygonscan.com/tx/{mint_tx_hash}"
-        
+            bridge_state["mint_tx_explorer"] = (
+                f"https://amoy.polygonscan.com/tx/{mint_tx_hash}"
+            )
+
         bridge_state["status"] = "complete"
         st.session_state[MCP_BORROWER_BRIDGE_SESSION_KEY] = bridge_state
-        
+
         amount_usdc = bridge_state.get("amount_usdc", "?")
         polygon_address = bridge_state.get("polygon_address", "?")
-        
-        return tool_success({
-            "bridge": bridge_state,
-            "message": (
-                f"✅ Bridge complete! {amount_usdc} USDC has been successfully bridged to {polygon_address} on Polygon.\n"
-                f"Burn tx: {bridge_state.get('burn_tx_explorer', 'N/A')}\n"
-                f"Mint tx: {bridge_state.get('mint_tx_explorer', 'N/A')}"
-            ),
-        })
+
+        return tool_success(
+            {
+                "bridge": bridge_state,
+                "message": (
+                    f"✅ Bridge complete! {amount_usdc} USDC has been successfully bridged to {polygon_address} on Polygon.\n"
+                    f"Burn tx: {bridge_state.get('burn_tx_explorer', 'N/A')}\n"
+                    f"Mint tx: {bridge_state.get('mint_tx_explorer', 'N/A')}"
+                ),
+            }
+        )
 
     register(
         "completeBorrowerBridge",

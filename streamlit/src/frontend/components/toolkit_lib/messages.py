@@ -37,7 +37,9 @@ def render_tool_message(tool_name: str, content: str) -> None:
             parsed_response = json.loads(content)
             if isinstance(parsed_response, dict) and parsed_response.get("show_button"):
                 show_button = True
-                button_label = parsed_response.get("button_label", "Approve Transaction")
+                button_label = parsed_response.get(
+                    "button_label", "Approve Transaction"
+                )
         except Exception:
             parsed_response = None
 

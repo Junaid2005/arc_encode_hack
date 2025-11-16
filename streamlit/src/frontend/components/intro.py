@@ -39,7 +39,9 @@ def _stream_text(text: str, delay: float = 0.04):
         time.sleep(delay)
 
 
-def _show_hero_image(target: Optional[st.delta_generator.DeltaGenerator] = None) -> None:
+def _show_hero_image(
+    target: Optional[st.delta_generator.DeltaGenerator] = None,
+) -> None:
     container = target or st
     for asset in HERO_ASSETS:
         if not asset.exists():
@@ -101,15 +103,23 @@ def render_intro_page() -> None:
 
     w3 = get_web3_client(rpc_url) if rpc_url else None
     if rpc_url and not w3:
-        st.warning("Unable to connect to the provided RPC endpoint. Double-check the URL or network status.")
+        st.warning(
+            "Unable to connect to the provided RPC endpoint. Double-check the URL or network status."
+        )
 
-    balance = _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
+    balance = (
+        _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
+    )
     avg_delay, invoice_count = _compute_invoice_metrics(df)
     credit_score = _fetch_credit_score(w3, wallet_address, contract_address, abi_text)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—")
-    col2.metric("Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—")
+    col1.metric(
+        "Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—"
+    )
+    col2.metric(
+        "Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—"
+    )
     col3.metric("Invoice Count", invoice_count if invoice_count is not None else "—")
 
 
@@ -132,7 +142,6 @@ def _update_liquidity_history(value: Optional[float]) -> list[float]:
     render_team_intro()
 
 
-
 def render_intro_page() -> None:
     """Render the whimsical PawChain landing page."""
 
@@ -144,7 +153,9 @@ def render_intro_page() -> None:
     liquidity_series = _update_liquidity_history(liquidity_value)
     liquidity_usdc = liquidity_series
     latest_liq = liquidity_usdc[-1]
-    delta_liq = liquidity_usdc[-1] - liquidity_usdc[-2] if len(liquidity_usdc) > 1 else 0
+    delta_liq = (
+        liquidity_usdc[-1] - liquidity_usdc[-2] if len(liquidity_usdc) > 1 else 0
+    )
     chart_df = pd.DataFrame({"liquidity": [round(val, 3) for val in liquidity_usdc]})
 
     with spark_col:
@@ -162,7 +173,7 @@ def render_intro_page() -> None:
             help=help_text,
             border=True,
         )
-    
+
     with dog_col:
         _show_dog_gif()
 
@@ -226,8 +237,11 @@ Collie’s daily routine: **Fetch invoices**, **Chase delinquent payments**, and
         "Curious where to start? Hop into the Chatbot tab, connect MetaMask on Arc Testnet, and ask Doggo for a guided fetch mission."
     )
 
+
 def render_team_intro() -> None:
-    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    video_path = (
+        Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    )
     if video_path.exists():
         video_b64 = _read_file_base64(video_path)
         if video_b64:
@@ -283,8 +297,11 @@ def _read_file_base64(file_path: Path) -> Optional[str]:
     except Exception:
         return None
 
+
 def _show_dog_gif() -> None:
-    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    video_path = (
+        Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    )
     if video_path.exists():
         video_b64 = _read_file_base64(video_path)
         if video_b64:

@@ -100,7 +100,10 @@ def run_mcp_llm_conversation(
                             try:
                                 status_callback(tool_name)
                             except Exception:
-                                logger.exception("Status callback raised an error while starting '%s'", tool_name)
+                                logger.exception(
+                                    "Status callback raised an error while starting '%s'",
+                                    tool_name,
+                                )
                         logger.info("Tool '%s' executing...", tool_name)
                         response_payload = handler(**arguments)
                         tool_output = (
@@ -136,10 +139,14 @@ def run_mcp_llm_conversation(
                                     }
                                     # Include chainId if specified for the transaction
                                     if "chainId" in metamask_data:
-                                        pending_cmd["chainId"] = metamask_data["chainId"]
+                                        pending_cmd["chainId"] = metamask_data[
+                                            "chainId"
+                                        ]
                                         # Also add it to tx_request for compatibility
                                         if isinstance(tx_request, dict):
-                                            tx_request["chainId"] = metamask_data["chainId"]
+                                            tx_request["chainId"] = metamask_data[
+                                                "chainId"
+                                            ]
                                     st.session_state[
                                         "chatbot_wallet_pending_command"
                                     ] = pending_cmd
@@ -166,7 +173,10 @@ def run_mcp_llm_conversation(
                             try:
                                 status_callback(None)
                             except Exception:
-                                logger.exception("Status callback raised an error while finishing '%s'", tool_name)
+                                logger.exception(
+                                    "Status callback raised an error while finishing '%s'",
+                                    tool_name,
+                                )
 
                 logger.info(
                     "Tool '%s' response: %s",
