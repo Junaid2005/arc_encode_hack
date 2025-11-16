@@ -92,11 +92,11 @@ def _show_gif_splash_once(file_path: str) -> None:
             with open(file_path, "rb") as file:
                 contents = file.read()
                 data_url = base64.b64encode(contents).decode("utf-8")
-            
+
             # Determine file type
             file_ext = Path(file_path).suffix.lower()
             is_video = file_ext in [".mp4", ".mov", ".webm"]
-            
+
             if is_video:
                 mime_type = f"video/{file_ext[1:]}"
                 media_tag = (
@@ -106,10 +106,8 @@ def _show_gif_splash_once(file_path: str) -> None:
                 )
             else:
                 mime_type = "image/gif" if file_ext == ".gif" else "image/png"
-                media_tag = (
-                    f'<img id="splash-media" src="data:{mime_type};base64,{data_url}" />'
-                )
-            
+                media_tag = f'<img id="splash-media" src="data:{mime_type};base64,{data_url}" />'
+
             html_template = """
 <style>
 #splash-overlay {{

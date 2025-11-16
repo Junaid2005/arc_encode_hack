@@ -40,7 +40,9 @@ def _stream_text(text: str, delay: float = 0.04):
         time.sleep(delay)
 
 
-def _show_hero_image(target: Optional[st.delta_generator.DeltaGenerator] = None) -> None:
+def _show_hero_image(
+    target: Optional[st.delta_generator.DeltaGenerator] = None,
+) -> None:
     container = target or st
     for asset in HERO_ASSETS:
         if not asset.exists():
@@ -102,15 +104,23 @@ def render_intro_page() -> None:
 
     w3 = get_web3_client(rpc_url) if rpc_url else None
     if rpc_url and not w3:
-        st.warning("Unable to connect to the provided RPC endpoint. Double-check the URL or network status.")
+        st.warning(
+            "Unable to connect to the provided RPC endpoint. Double-check the URL or network status."
+        )
 
-    balance = _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
+    balance = (
+        _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
+    )
     avg_delay, invoice_count = _compute_invoice_metrics(df)
     credit_score = _fetch_credit_score(w3, wallet_address, contract_address, abi_text)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—")
-    col2.metric("Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—")
+    col1.metric(
+        "Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—"
+    )
+    col2.metric(
+        "Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—"
+    )
     col3.metric("Invoice Count", invoice_count if invoice_count is not None else "—")
 
 
@@ -133,7 +143,6 @@ def _update_liquidity_history(value: Optional[float]) -> list[float]:
     render_team_intro()
 
 
-
 def render_intro_page() -> None:
     """Render the whimsical PawChain landing page."""
 
@@ -148,17 +157,6 @@ def render_intro_page() -> None:
     for _ in range(9):
         spark_values.append(spark_values[-1] + random.uniform(0.01, 0.05))
     chart_df = pd.DataFrame({"liquidity": [round(val, 3) for val in spark_values]})
-
-    if not st.session_state.get(INTRO_VISIT_KEY):
-        st.session_state[INTRO_VISIT_KEY] = True
-        st.write_stream(
-            _stream_text("Welcome to SnifferBank — where every ledger has a loyal watchdog 🐾")
-        )
-        _show_hero_image(hero_col)
-        st.balloons()
-    else:
-        _show_hero_image(hero_col)
-        st.caption("Welcome back to the Sniffer! Grab a biscuit and keep sniffing. 🦴")
 
     with spark_col:
         spark_col.markdown("<div style='margin-top:-1.5rem;'></div>", unsafe_allow_html=True)
@@ -188,6 +186,9 @@ def render_intro_page() -> None:
             """,
             unsafe_allow_html=True,
         )
+
+    with dog_col:
+        _show_dog_gif()
 
     st.subheader("🐾 Welcome to Sniffer Bank")
     st.markdown(
@@ -261,8 +262,11 @@ Collie’s daily routine: **Fetch invoices**, **Chase delinquent payments**, and
         "Curious where to start? Hop into the Chatbot tab, connect MetaMask on Arc Testnet, and ask Doggo for a guided fetch mission."
     )
 
+
 def render_team_intro() -> None:
-    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    video_path = (
+        Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    )
     if video_path.exists():
         video_b64 = _read_file_base64(video_path)
         if video_b64:
@@ -317,3 +321,20 @@ def _read_file_base64(file_path: Path) -> Optional[str]:
             return base64.b64encode(file.read()).decode("utf-8")
     except Exception:
         return None
+
+
+def _show_dog_gif() -> None:
+    video_path = (
+        Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    )
+    if video_path.exists():
+        video_b64 = _read_file_base64(video_path)
+        if video_b64:
+            st.markdown(
+                f"""
+                <video autoplay loop muted playsinline style="display:block;border-radius:20px;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                  <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                </video>
+                """,
+                unsafe_allow_html=True,
+            )

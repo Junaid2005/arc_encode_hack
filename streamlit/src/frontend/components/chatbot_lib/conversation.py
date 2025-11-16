@@ -111,7 +111,10 @@ def run_mcp_llm_conversation(
                             try:
                                 status_callback({"phase": "start", "tool": tool_name})
                             except Exception:
-                                logger.exception("Status callback raised an error while starting '%s'", tool_name)
+                                logger.exception(
+                                    "Status callback raised an error while starting '%s'",
+                                    tool_name,
+                                )
                         logger.info("Tool '%s' executing...", tool_name)
                         response_payload = handler(**arguments)
                         tool_output = (
@@ -177,7 +180,10 @@ def run_mcp_llm_conversation(
                                     }
                                 )
                             except Exception:
-                                logger.exception("Status callback raised an error while finishing '%s'", tool_name)
+                                logger.exception(
+                                    "Status callback raised an error while finishing '%s'",
+                                    tool_name,
+                                )
 
                 logger.info(
                     "Tool '%s' response: %s",

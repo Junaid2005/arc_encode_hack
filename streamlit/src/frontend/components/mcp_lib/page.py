@@ -1316,7 +1316,9 @@ def render_mcp_tools_page() -> None:
 
     with tab_roles:
         st.subheader("MetaMask Role Assignment")
-        st.markdown("Connect your wallet and map it to Owner, Lender, or Borrower roles.")
+        st.markdown(
+            "Connect your wallet and map it to Owner, Lender, or Borrower roles."
+        )
 
         wallet_info = connect_wallet(
             key="role_assignment_wallet",
@@ -1347,7 +1349,9 @@ def render_mcp_tools_page() -> None:
                 key="role_assignment_choice",
             )
             if current_address:
-                st.success(f"✅ Connected: {current_address[:6]}...{current_address[-4:]}")
+                st.success(
+                    f"✅ Connected: {current_address[:6]}...{current_address[-4:]}"
+                )
                 if st.button("Assign to role", key="assign_role_button"):
                     role_addresses[role_choice] = current_address
                     st.session_state[roles_key] = role_addresses
@@ -1359,7 +1363,9 @@ def render_mcp_tools_page() -> None:
             elif wallet_status:
                 st.info(f"MetaMask status: {wallet_status}")
             else:
-                st.info("Use the wallet widget above to connect MetaMask, then assign your role.")
+                st.info(
+                    "Use the wallet widget above to connect MetaMask, then assign your role."
+                )
 
         with info_col:
             st.caption("Stored role addresses")
@@ -1370,11 +1376,17 @@ def render_mcp_tools_page() -> None:
             pk_value = role_private_keys.get(role_name)
             addr = role_addresses.get(role_name)
             if pk_value:
-                st.caption(f"{role_name}: env private key configured for automatic signing.")
+                st.caption(
+                    f"{role_name}: env private key configured for automatic signing."
+                )
             elif addr:
-                st.caption(f"{role_name}: MetaMask wallet {addr} will sign when required.")
+                st.caption(
+                    f"{role_name}: MetaMask wallet {addr} will sign when required."
+                )
             else:
-                st.caption(f"{role_name}: no signer configured yet; assign a MetaMask wallet above.")
+                st.caption(
+                    f"{role_name}: no signer configured yet; assign a MetaMask wallet above."
+                )
 
     with tab_verification:
         _render_verification_section()
