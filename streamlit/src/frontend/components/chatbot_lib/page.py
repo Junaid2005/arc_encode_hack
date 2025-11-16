@@ -1532,24 +1532,72 @@ def render_chatbot_page() -> None:
     ):
         target_chain = pending_action.get("targetChainId")
         sequence = pending_action.get("sequence")
-        wallet_args.update(
-            {
-                # Remove headless mode - network switch needs interactive UI for MetaMask popup
-                "command": "switch_network",
-                "command_sequence": sequence,
-                "command_payload": {"require_chain_id": target_chain},
-            }
-        )
-        # Update the required chain for the switch
-        wallet_args["require_chain_id"] = target_chain
-        expected_chain = target_chain  # Update expected chain for UI display
-
+        
+        # Clear the flag and inject JavaScript to trigger MetaMask directly
+        pending_action["needs_wallet_command"] = False
+        st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
+        
+        # Use JavaScript to directly trigger MetaMask network switch
+        chain_hex = hex(target_chain) if target_chain else "0x4cef52"
+        network_name = "Polygon Amoy" if target_chain == 80002 else "Arc Testnet"
+        
+        st.components.v1.html(f"""
+        <script>
+        console.log('[Direct Switch] Attempting to switch to {network_name} ({chain_hex})...');
+        if (window.ethereum) {{
+            window.ethereum.request({{
+                method: 'wallet_switchEthereumChain',
+                params: [{{ chainId: '{chain_hex}' }}]
+            }}).then(() => {{
+                console.log('[Direct Switch] Successfully switched to {network_name}!');
+                // Force page reload after switch to update wallet state
+                setTimeout(() => window.parent.location.reload(), 500);
+            }}).catch((error) => {{
+                console.error('[Direct Switch] Network switch failed:', error);
+                if (error.code === 4902) {{
+                    // Network not added, try to add it
+                    console.log('[Direct Switch] Adding {network_name} network...');
+                    const params = {target_chain} === 80002 ? {{
+                        chainId: '{chain_hex}',
+                        chainName: 'Polygon Amoy Testnet',
+                        nativeCurrency: {{
+                            name: 'MATIC',
+                            symbol: 'MATIC',
+                            decimals: 18
+                        }},
+                        rpcUrls: ['https://rpc-amoy.polygon.technology'],
+                        blockExplorerUrls: ['https://amoy.polygonscan.com']
+                    }} : {{
+                        chainId: '{chain_hex}',
+                        chainName: 'Arc Testnet',
+                        nativeCurrency: {{
+                            name: 'USDC',
+                            symbol: 'USDC',
+                            decimals: 6
+                        }},
+                        rpcUrls: ['https://rpc.testnet.arc.network'],
+                        blockExplorerUrls: ['https://testnet.arcscan.app']
+                    }};
+                    window.ethereum.request({{
+                        method: 'wallet_addEthereumChain',
+                        params: [params]
+                    }}).then(() => {{
+                        setTimeout(() => window.parent.location.reload(), 500);
+                    }});
+                }}
+            }});
+        }} else {{
+            console.error('[Direct Switch] MetaMask not found!');
+        }}
+        </script>
+        """, height=0)
+        
         # Debug logging
         import logging
 
         logger = logging.getLogger("arc.mcp.tools")
         logger.info(
-            f"Sending network switch command to wallet component (interactive mode): target_chain={target_chain}, sequence={sequence}"
+            f"Triggered direct JavaScript network switch to {network_name} ({chain_hex})"
         )
 
     # Debug: Log wallet args when there's a network switch command
@@ -1573,6 +1621,23 @@ def render_chatbot_page() -> None:
         if tx_req and isinstance(tx_req, dict):
             logger.info(f"Transaction chainId in request: {tx_req.get('chainId')}")
 
+    # Add emergency clear button if stuck waiting
+    if pending_action or st.session_state.get("chatbot_waiting_for_wallet"):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.warning("⚠️ If the wallet automation is stuck, you can clear all pending states.")
+        with col2:
+            if st.button("🔄 Clear & Continue", key="emergency_clear", type="secondary"):
+                st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+                st.session_state.pop("chatbot_waiting_for_wallet", None)
+                st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+                st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
+                st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
+                st.success("✅ Cleared all pending states.")
+                st.rerun()
+    
     # Always render the wallet component (now with command if needed)
     wallet_info = connect_wallet(**wallet_args)
 
@@ -1602,28 +1667,114 @@ def render_chatbot_page() -> None:
     # Always show manual network switch options for convenience
     if wallet_info and wallet_info.get("chainId"):
         current_chain = _normalise_chain_id(wallet_info.get("chainId"))
-        with st.expander("🔄 Quick Network Switch", expanded=False):
-            st.write(
-                f"Current network: {'ARC' if current_chain == 5042002 else 'Polygon' if current_chain == 80002 else 'Unknown'}"
-            )
+        with st.expander("🔄 Quick Network Switch & Debug", expanded=True):
+            # Debug info
+            st.info(f"🔍 Debug Info:")
+            st.write(f"- Raw chainId from wallet: `{wallet_info.get('chainId')}`")
+            st.write(f"- Normalized chain (decimal): `{current_chain}`")
+            st.write(f"- ARC chain ID (decimal): `5042002` (hex: `0x4cef52`)")
+            st.write(f"- Polygon chain ID (decimal): `80002` (hex: `0x13882`)")
+            st.write(f"- Current network: **{'ARC' if current_chain == 5042002 else 'Polygon' if current_chain == 80002 else f'Unknown ({current_chain})'}**")
+            
+            st.divider()
+            
+            # Test MetaMask API directly
+            if st.button("🧪 Test MetaMask API", key="test_metamask_api", type="secondary", use_container_width=True):
+                st.components.v1.html("""
+                <script>
+                console.log('=== MetaMask API Test Started ===');
+                
+                // Check if MetaMask exists
+                if (typeof window.ethereum !== 'undefined') {
+                    console.log('✅ MetaMask detected');
+                    console.log('ethereum object:', window.ethereum);
+                    
+                    // Get current chain
+                    window.ethereum.request({ method: 'eth_chainId' })
+                        .then(chainId => {
+                            console.log('Current chainId (raw):', chainId);
+                            console.log('Current chainId (decimal):', parseInt(chainId, 16));
+                            
+                            // Test switching to Polygon
+                            console.log('Testing switch to Polygon (0x13882)...');
+                            return window.ethereum.request({
+                                method: 'wallet_switchEthereumChain',
+                                params: [{ chainId: '0x13882' }]
+                            });
+                        })
+                        .then(() => {
+                            console.log('✅ Switch successful! Reloading page...');
+                            setTimeout(() => window.parent.location.reload(), 1000);
+                        })
+                        .catch(error => {
+                            console.error('❌ Switch failed:', error);
+                            console.log('Error code:', error.code);
+                            console.log('Error message:', error.message);
+                            
+                            if (error.code === 4902) {
+                                console.log('Network not found, attempting to add it...');
+                                return window.ethereum.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: '0x13882',
+                                        chainName: 'Polygon Amoy Testnet',
+                                        nativeCurrency: {
+                                            name: 'MATIC',
+                                            symbol: 'MATIC',
+                                            decimals: 18
+                                        },
+                                        rpcUrls: ['https://rpc-amoy.polygon.technology'],
+                                        blockExplorerUrls: ['https://amoy.polygonscan.com']
+                                    }]
+                                }).then(() => {
+                                    console.log('✅ Network added successfully!');
+                                    setTimeout(() => window.parent.location.reload(), 1000);
+                                }).catch(addError => {
+                                    console.error('❌ Failed to add network:', addError);
+                                });
+                            }
+                        });
+                } else {
+                    console.error('❌ MetaMask not detected!');
+                    console.log('window.ethereum is:', window.ethereum);
+                }
+                
+                console.log('=== MetaMask API Test Complete ===');
+                </script>
+                """, height=0)
+                st.success("Check browser console (F12) for detailed MetaMask API test results")
+            
+            st.divider()
+            st.write("**Network Switch Buttons:**")
             col1, col2 = st.columns(2)
             with col1:
                 if st.button(
                     "Switch to ARC",
                     key="quick_switch_arc",
                     disabled=(current_chain == 5042002),
+                    use_container_width=True
                 ):
+                    # Clear any stuck states first
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+                    st.session_state.pop("chatbot_waiting_for_wallet", None)
+                    st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                    
                     st.components.v1.html(
                         """
                     <script>
+                    console.log('[Quick Switch] Initiating switch to ARC...');
                     if (window.ethereum) {
                         window.ethereum.request({
                             method: 'wallet_switchEthereumChain',
                             params: [{ chainId: '0x4cef52' }]
                         }).then(() => {
+                            console.log('[Quick Switch] Successfully switched to ARC!');
                             window.parent.location.reload();
                         }).catch((error) => {
+                            console.error('[Quick Switch] Error:', error);
                             if (error.code === 4902) {
+                                console.log('[Quick Switch] Adding ARC network...');
                                 window.ethereum.request({
                                     method: 'wallet_addEthereumChain',
                                     params: [{
@@ -1638,10 +1789,15 @@ def render_chatbot_page() -> None:
                                         blockExplorerUrls: ['https://testnet.arcscan.app']
                                     }]
                                 }).then(() => {
+                                    console.log('[Quick Switch] Network added, reloading...');
                                     window.parent.location.reload();
+                                }).catch((addError) => {
+                                    console.error('[Quick Switch] Failed to add network:', addError);
                                 });
                             }
                         });
+                    } else {
+                        console.error('[Quick Switch] MetaMask not found!');
                     }
                     </script>
                     """,
@@ -1652,18 +1808,29 @@ def render_chatbot_page() -> None:
                     "Switch to Polygon",
                     key="quick_switch_polygon",
                     disabled=(current_chain == 80002),
+                    use_container_width=True
                 ):
+                    # Clear any stuck states first
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+                    st.session_state.pop("chatbot_waiting_for_wallet", None)
+                    st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                    
                     st.components.v1.html(
                         """
                     <script>
+                    console.log('[Quick Switch] Initiating switch to Polygon Amoy...');
                     if (window.ethereum) {
                         window.ethereum.request({
                             method: 'wallet_switchEthereumChain',
                             params: [{ chainId: '0x13882' }]
                         }).then(() => {
+                            console.log('[Quick Switch] Successfully switched to Polygon!');
                             window.parent.location.reload();
                         }).catch((error) => {
+                            console.error('[Quick Switch] Error:', error);
                             if (error.code === 4902) {
+                                console.log('[Quick Switch] Adding Polygon Amoy network...');
                                 window.ethereum.request({
                                     method: 'wallet_addEthereumChain',
                                     params: [{
@@ -1678,10 +1845,15 @@ def render_chatbot_page() -> None:
                                         blockExplorerUrls: ['https://amoy.polygonscan.com']
                                     }]
                                 }).then(() => {
+                                    console.log('[Quick Switch] Network added, reloading...');
                                     window.parent.location.reload();
+                                }).catch((addError) => {
+                                    console.error('[Quick Switch] Failed to add network:', addError);
                                 });
                             }
                         });
+                    } else {
+                        console.error('[Quick Switch] MetaMask not found!');
                     }
                     </script>
                     """,
@@ -1848,6 +2020,21 @@ def render_chatbot_page() -> None:
     pending_tx_state = st.session_state.get(CHATBOT_PENDING_TX_KEY)
     if tx_req or debug_state or pending_tx_state:
         with st.expander("Wallet automation status", expanded=False):
+            # Always show clear button prominently at the top
+            st.error("⚠️ Wallet automation appears stuck. Click the button below to clear:")
+            if st.button("🔄 CLEAR ALL STUCK STATES", key="clear_stuck_states", type="primary", use_container_width=True):
+                st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+                st.session_state.pop("chatbot_waiting_for_wallet", None)
+                st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+                st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
+                st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
+                st.success("✅ Cleared all pending states. You can continue chatting.")
+                st.rerun()
+            
+            st.divider()
+            
             if not debug_state and not pending_tx_state:
                 st.write("No automation metadata yet.")
             else:
