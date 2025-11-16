@@ -36,6 +36,15 @@ def stream_chunks(stream: Iterable) -> Iterable[str]:
             yield delta
 
 
+def _parse_tool_output(content: Any) -> Any:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return None
+    return content
+
+
 def run_mcp_llm_conversation(
     client: Any,
     deployment: str,
@@ -44,7 +53,7 @@ def run_mcp_llm_conversation(
     function_map: Dict[str, Any],
     *,
     wallet_widget_callback: Any = None,
-    status_callback: Optional[Callable[[Optional[str]], None]] = None,
+    status_callback: Optional[Callable[[Any], None]] = None,
 ) -> None:
     pending = client.chat.completions.create(
         model=deployment,
@@ -95,10 +104,12 @@ def run_mcp_llm_conversation(
                     logger.warning("Tool '%s' is not registered.", tool_name)
                     tool_output = tool_error(f"Tool '{tool_name}' is not registered.")
                 else:
+                    parsed_response: Any = None
+                    tool_success_flag = False
                     try:
                         if status_callback:
                             try:
-                                status_callback(tool_name)
+                                status_callback({"phase": "start", "tool": tool_name})
                             except Exception:
                                 logger.exception("Status callback raised an error while starting '%s'", tool_name)
                         logger.info("Tool '%s' executing...", tool_name)
@@ -109,51 +120,42 @@ def run_mcp_llm_conversation(
                             else tool_success(response_payload)
                         )
 
+                        parsed_response = _parse_tool_output(tool_output)
+                        if isinstance(parsed_response, dict):
+                            tool_success_flag = bool(parsed_response.get("success"))
+
                         # Check if tool returned a MetaMask transaction request
-                        try:
-                            parsed = (
-                                json.loads(tool_output)
-                                if isinstance(tool_output, str)
-                                else tool_output
-                            )
-                            if (
-                                isinstance(parsed, dict)
-                                and parsed.get("success")
-                                and "metamask" in parsed
-                            ):
-                                metamask_data = parsed["metamask"]
-                                tx_request = metamask_data.get("tx_request")
-                                if tx_request:
-                                    # Store pending transaction in session for wallet widget to display
-                                    sequence = int(time.time() * 1000)
-                                    pending_cmd = {
-                                        "command": "send_transaction",
-                                        "tx_request": tx_request,
-                                        "label": metamask_data.get(
-                                            "hint", "Confirm Transaction"
-                                        ),
-                                        "sequence": sequence,
-                                    }
-                                    # Include chainId if specified for the transaction
-                                    if "chainId" in metamask_data:
-                                        pending_cmd["chainId"] = metamask_data["chainId"]
-                                        # Also add it to tx_request for compatibility
-                                        if isinstance(tx_request, dict):
-                                            tx_request["chainId"] = metamask_data["chainId"]
-                                    st.session_state[
-                                        "chatbot_wallet_pending_command"
-                                    ] = pending_cmd
-                                    st.session_state["chatbot_needs_tx_rerun"] = True
-                                    st.session_state["chatbot_waiting_for_wallet"] = (
-                                        True
-                                    )
-                                    wallet_pause_requested = True
-                                    logger.info(
-                                        "Stored transaction request for GPT-triggered MetaMask popup"
-                                    )
-                                    tool_output = json.dumps(parsed)
-                        except Exception:
-                            pass  # Keep original tool_output if parsing fails
+                        if (
+                            isinstance(parsed_response, dict)
+                            and parsed_response.get("success")
+                            and "metamask" in parsed_response
+                        ):
+                            metamask_data = parsed_response["metamask"]
+                            tx_request = metamask_data.get("tx_request")
+                            if tx_request:
+                                sequence = int(time.time() * 1000)
+                                pending_cmd = {
+                                    "command": "send_transaction",
+                                    "tx_request": tx_request,
+                                    "label": metamask_data.get(
+                                        "hint", "Confirm Transaction"
+                                    ),
+                                    "sequence": sequence,
+                                }
+                                if "chainId" in metamask_data:
+                                    pending_cmd["chainId"] = metamask_data["chainId"]
+                                    if isinstance(tx_request, dict):
+                                        tx_request["chainId"] = metamask_data["chainId"]
+                                st.session_state["chatbot_wallet_pending_command"] = (
+                                    pending_cmd
+                                )
+                                st.session_state["chatbot_needs_tx_rerun"] = True
+                                st.session_state["chatbot_waiting_for_wallet"] = True
+                                wallet_pause_requested = True
+                                logger.info(
+                                    "Stored transaction request for GPT-triggered MetaMask popup"
+                                )
+                                tool_output = json.dumps(parsed_response)
 
                         logger.info("Tool '%s' completed successfully", tool_name)
                     except Exception as exc:  # pragma: no cover - surfaced via UI only
@@ -161,10 +163,19 @@ def run_mcp_llm_conversation(
                             "Tool '%s' raised an exception: %s", tool_name, exc
                         )
                         tool_output = tool_error(str(exc))
+                        parsed_response = _parse_tool_output(tool_output)
+                        tool_success_flag = False
                     finally:
                         if status_callback:
                             try:
-                                status_callback(None)
+                                status_callback(
+                                    {
+                                        "phase": "complete",
+                                        "tool": tool_name,
+                                        "success": tool_success_flag,
+                                        "payload": parsed_response,
+                                    }
+                                )
                             except Exception:
                                 logger.exception("Status callback raised an error while finishing '%s'", tool_name)
 
@@ -208,7 +219,7 @@ def run_mcp_llm_conversation(
 
     if status_callback:
         try:
-            status_callback(None)
+            status_callback({"phase": "idle"})
         except Exception:
             logger.exception("Status callback raised an error during final reset")
 

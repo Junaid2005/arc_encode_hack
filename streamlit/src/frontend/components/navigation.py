@@ -25,7 +25,7 @@ def render_navigation() -> str:
 
         for internal_name, label in PAGE_ENTRIES:
             button_type = "primary" if active == internal_name else "secondary"
-            if st.button(label, use_container_width=True, type=button_type):
+            if st.button(label, width="stretch", type=button_type):
                 st.session_state["active_page"] = internal_name
                 active = internal_name
 

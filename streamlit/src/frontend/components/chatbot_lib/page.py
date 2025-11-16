@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import io
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -35,6 +39,7 @@ from ..toolkit_lib.borrower_bridge_tools import build_borrower_bridge_toolkit
 from ..web3_utils import get_web3_client, load_contract_abi
 from ..wallet_connect_component import wallet_command, connect_wallet
 from ..session import DEFAULT_SESSION_KEY
+from ..verification.verification_flow import run_verification_flow
 from .attachments import build_attachment_context
 from .azure_client import create_azure_client
 from .chat_state import append_message, initialize_chat_state
@@ -55,19 +60,39 @@ CHATBOT_RESUME_PENDING_KEY = "chatbot_resume_pending_run"
 CHATBOT_PENDING_TX_KEY = "chatbot_pending_tx_state"
 CHATBOT_NETWORK_SWITCH_POLLS_KEY = "chatbot_network_switch_poll_count"
 CHATBOT_TX_SUBMITTED_KEY = "chatbot_tx_already_submitted"
+CHATBOT_MANUAL_NETWORK_REQUEST_KEY = "chatbot_manual_network_request"
+CHATBOT_VERIFICATION_CACHE_KEY = "chatbot_verification_cache"
+VERIFICATION_CACHE_TTL_SECONDS = 15 * 60
+VERIFICATION_REQUIRED_MESSAGE = (
+    "Borrower verification data is missing. Run the `runUserVerification` tool for this wallet and use the resulting score before calling `issueScore`."
+)
 
-GIFS_DIR = Path(__file__).resolve().parents[1] / "gifs"
+_GIF_BASE_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "gifs",  # streamlit/src/frontend/gifs
+    Path(__file__).resolve().parents[3] / "frontend" / "gifs",
+]
+GIFS_DIR = next((p for p in _GIF_BASE_CANDIDATES if p.exists()), _GIF_BASE_CANDIDATES[0])
+_GIF_CACHE: Dict[str, str] = {}
+THINKING_BUSY_GIF = GIFS_DIR / "thinking_2.gif"
+THINKING_IDLE_GIF = GIFS_DIR / "thinking_1.gif"
+SBT_TOKEN_GIF = GIFS_DIR / "sbt_token_given.gif"
 GIF_ASSETS = {
-    "sbt": GIFS_DIR / "sbt_token_given.gif",
+    "sbt": SBT_TOKEN_GIF,
     "loan": GIFS_DIR / "loan_given.gif",
-    "bridge": GIFS_DIR / "thinking_2.gif",
-    "idle": GIFS_DIR / "thinking_1.gif",
+    "bridge": THINKING_BUSY_GIF,
+    "idle": THINKING_IDLE_GIF,
 }
 GIF_CAPTIONS = {
     "sbt": "Issuing or verifying TrustMint credentials…",
     "loan": "Processing loan and repayment workflows on Arc…",
     "bridge": "Handling CCTP bridging and Polygon settlement steps…",
     "idle": "Coordinating MCP tools…",
+}
+THINKING_BUSY_CAPTION = "Running MCP tools – hang tight while MetaMask actions complete."
+THINKING_IDLE_CAPTION = "Ready for the next instruction."
+MIN_GIF_DURATION_SECONDS = {
+    "thinking_idle": 5.0,
+    "thinking_busy": 5.0,
 }
 SBT_KEYWORDS = ("sbt", "score", "trustmint")
 LOAN_KEYWORDS = ("loan", "repay", "deposit", "withdraw", "ban", "pool", "lender", "borrower")
@@ -87,16 +112,16 @@ def _resolve_task_category(task_hint: Optional[str]) -> str:
     return "idle"
 
 
-def _get_task_gif(task_hint: Optional[str]) -> tuple[Optional[Path], str]:
+def _get_task_gif(task_hint: Optional[str]) -> tuple[str, Optional[Path], str]:
     category = _resolve_task_category(task_hint)
     path = GIF_ASSETS.get(category)
     caption = GIF_CAPTIONS.get(category, GIF_CAPTIONS["idle"])
     if path and path.exists():
-        return path, caption
+        return category, path, caption
     fallback = GIF_ASSETS.get("idle")
     if fallback and fallback.exists():
-        return fallback, caption
-    return None, caption
+        return "idle", fallback, caption
+    return category, None, caption
 
 
 def _derive_task_hint_from_state(
@@ -117,20 +142,244 @@ def _derive_task_hint_from_state(
     return None
 
 
+GIF_DISPLAY_WIDTH = 280
+
+
 class TaskGifDisplay:
     """Utility to render task-specific GIFs inside the chat UI."""
 
     def __init__(self) -> None:
         self._image_placeholder = st.empty()
         self._caption_placeholder = st.empty()
+        self._context_hint: Optional[str] = None
+        self._tool_active = False
+        self._thinking_override = False
+        self._current_key: Optional[str] = None
+        self._current_started_at: float = 0.0
 
-    def show(self, task_hint: Optional[str]) -> None:
-        path, caption = _get_task_gif(task_hint)
-        if path and path.exists():
-            self._image_placeholder.image(str(path), use_column_width=True)
+    def set_context(self, task_hint: Optional[str]) -> None:
+        """Define the baseline GIF (loan, sbt, etc.) shown when no tool is running."""
+        self._context_hint = task_hint
+        if not self._tool_active:
+            self._render_context()
+
+    def begin_conversation(self) -> None:
+        self._thinking_override = True
+        if not self._tool_active:
+            self._render_gif("thinking_idle", THINKING_IDLE_GIF, THINKING_IDLE_CAPTION, allow_interrupt=True)
+
+    def end_conversation(self) -> None:
+        self._thinking_override = False
+        if not self._tool_active:
+            self._render_context()
+
+    def show_tool_status(self, tool_name: Optional[str]) -> None:
+        """Swap GIFs while tools are executing."""
+        if tool_name:
+            self._tool_active = True
+            caption = THINKING_BUSY_CAPTION
+            if tool_name:
+                caption = f"Running `{tool_name}` via MCP tools…"
+            self._render_gif(
+                "thinking_busy",
+                THINKING_BUSY_GIF,
+                caption,
+                allow_interrupt=True,
+            )
+            return
+        self._tool_active = False
+        if self._thinking_override:
+            self._render_gif("thinking_idle", THINKING_IDLE_GIF, THINKING_IDLE_CAPTION)
+        else:
+            self._render_context()
+
+    def clear(self) -> None:
+        self._tool_active = False
+        self._context_hint = None
+        self._render_gif("thinking_idle", THINKING_IDLE_GIF, THINKING_IDLE_CAPTION)
+
+    def handle_status_event(self, event: Any) -> None:
+        """Router used by the conversation loop to update GIFs."""
+        if isinstance(event, dict):
+            phase = event.get("phase")
+            tool = event.get("tool")
+            if phase == "start":
+                self.show_tool_status(tool)
+                return
+            if phase == "complete":
+                if event.get("success") and tool == "issueScore":
+                    self._thinking_override = False
+                    self.set_context("sbt")
+                    self._render_context()
+                    return
+                if event.get("success") and tool == "openLoan":
+                    self._thinking_override = False
+                    self.set_context("loan")
+                    self._render_context()
+                    return
+                self.show_tool_status(None)
+                return
+            if phase == "idle":
+                self.end_conversation()
+                if self._context_hint:
+                    self._render_context()
+                else:
+                    self._render_gif(
+                        "thinking_idle", THINKING_IDLE_GIF, THINKING_IDLE_CAPTION
+                    )
+                return
+        if event is None:
+            self.show_tool_status(None)
+            return
+        self.show_tool_status(str(event))
+
+    def _render_context(self) -> None:
+        if self._thinking_override and not self._tool_active:
+            self._render_gif("thinking_idle", THINKING_IDLE_GIF, THINKING_IDLE_CAPTION)
+            return
+        category, path, caption = _get_task_gif(self._context_hint)
+        if not path:
+            path = THINKING_IDLE_GIF
+            caption = THINKING_IDLE_CAPTION
+            category = "thinking_idle"
+        self._render_gif(category, path, caption)
+
+    def _render_gif(
+        self,
+        key: str,
+        path: Optional[Path],
+        caption: str,
+        *,
+        allow_interrupt: bool = False,
+    ) -> None:
+        if not allow_interrupt:
+            self._respect_min_duration()
+        self._current_key = key
+        self._current_started_at = time.time()
+        data_url = _gif_data_url(path)
+        if data_url:
+            self._image_placeholder.markdown(
+                f"<img src='{data_url}' width='{GIF_DISPLAY_WIDTH}' />",
+                unsafe_allow_html=True,
+            )
         else:
             self._image_placeholder.empty()
         self._caption_placeholder.caption(caption)
+
+    def _respect_min_duration(self) -> None:
+        if not self._current_key:
+            return
+        min_duration = MIN_GIF_DURATION_SECONDS.get(self._current_key)
+        if not min_duration:
+            return
+        elapsed = time.time() - self._current_started_at
+        remaining = min_duration - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+
+def _gif_data_url(path: Optional[Path]) -> Optional[str]:
+    if path is None:
+        return None
+    resolved = path.resolve()
+    cache_key = str(resolved)
+    cached = _GIF_CACHE.get(cache_key)
+    if cached:
+        return cached
+    if not resolved.exists():
+        return None
+    try:
+        encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+        data_url = f"data:image/gif;base64,{encoded}"
+        _GIF_CACHE[cache_key] = data_url
+        return data_url
+    except Exception:
+        return None
+
+
+class _VerificationMemoryFile:
+    def __init__(self, name: str, mime_type: str, data: bytes) -> None:
+        self.name = name
+        self.type = mime_type
+        self.size = len(data)
+        self._buffer = io.BytesIO(data)
+
+    def read(self, *args: Any, **kwargs: Any) -> bytes:
+        return self._buffer.read(*args, **kwargs)
+
+    def seek(self, *args: Any, **kwargs: Any) -> int:
+        return self._buffer.seek(*args, **kwargs)
+
+    def tell(self) -> int:
+        return self._buffer.tell()
+
+
+def _verification_cache() -> Dict[str, Any]:
+    cache = st.session_state.get(CHATBOT_VERIFICATION_CACHE_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+    now = time.time()
+    expired = [
+        key
+        for key, entry in cache.items()
+        if now - float(entry.get("timestamp", 0)) > VERIFICATION_CACHE_TTL_SECONDS
+    ]
+    for key in expired:
+        cache.pop(key, None)
+    st.session_state[CHATBOT_VERIFICATION_CACHE_KEY] = cache
+    return cache
+
+
+def _cache_verification_result(wallet: str, entry: Dict[str, Any]) -> None:
+    cache = _verification_cache()
+    cache[wallet.lower()] = entry
+    st.session_state[CHATBOT_VERIFICATION_CACHE_KEY] = cache
+
+
+def _get_verification_result(wallet: str) -> Optional[Dict[str, Any]]:
+    cache = _verification_cache()
+    return cache.get(wallet.lower())
+
+
+def _update_combined_upload_payloads() -> None:
+    form_payloads = st.session_state.get("verification_form_upload_payloads")
+    chat_payloads = st.session_state.get("chatbot_attachment_payloads")
+    combined: list[Dict[str, Any]] = []
+    if isinstance(form_payloads, list):
+        combined.extend(form_payloads)
+    if isinstance(chat_payloads, list):
+        combined.extend(chat_payloads)
+    st.session_state["verification_uploaded_file_payloads"] = combined
+
+
+def _guard_issue_score(handler: Callable[..., str]) -> Callable[..., str]:
+    def _wrapped(*, wallet_address: str, score_value: int, **kwargs: Any) -> str:
+        try:
+            checksum_wallet = Web3.to_checksum_address(wallet_address)
+        except ValueError:
+            return tool_error("Wallet address is invalid.")
+        entry = _get_verification_result(checksum_wallet)
+        if not entry:
+            return tool_error(VERIFICATION_REQUIRED_MESSAGE)
+        expected_score = entry.get("final_score")
+        if expected_score is None:
+            return tool_error(
+                "Verification summary is missing a final score. Re-run `runUserVerification` with the borrower's details."
+            )
+        try:
+            expected_score = int(expected_score)
+        except (ValueError, TypeError):
+            return tool_error(
+                "Cached verification score is invalid. Re-run `runUserVerification` before issuing."
+            )
+        if int(score_value) != expected_score:
+            return tool_error(
+                f"The TrustMint score must match the verified `final_score` ({expected_score}). "
+                "Re-run `issueScore` with that value or repeat verification if the borrower resubmitted documents."
+            )
+        return handler(wallet_address=checksum_wallet, score_value=expected_score, **kwargs)
+
+    return _wrapped
 
 
 def _normalise_chain_id(value: Any) -> Optional[int]:
@@ -178,8 +427,8 @@ def _get_chain_preference() -> str:
     return DEFAULT_CHAIN_PREF
 
 
-def _wallet_flow_blocked() -> bool:
-    """Check if wallet flow is blocked, with timeout handling."""
+def _wallet_flow_blocked() -> tuple[bool, Optional[str]]:
+    """Check if wallet flow is blocked, with timeout handling. Returns (blocked, reason)."""
     import time
     
     # Check pending command with timeout
@@ -211,11 +460,16 @@ def _wallet_flow_blocked() -> bool:
             logger.warning(f"Cleared stale pending transaction after 60s timeout")
             pending_tx = None
     
-    return bool(
-        pending_command
-        or pending_tx
-        or st.session_state.get("chatbot_waiting_for_wallet")
-    )
+    if pending_command:
+        return True, "wallet_command"
+    if pending_tx:
+        return True, "pending_tx"
+    if st.session_state.get("chatbot_waiting_for_wallet"):
+        return True, "wallet_wait"
+    manual_request = st.session_state.get(CHATBOT_MANUAL_NETWORK_REQUEST_KEY)
+    if isinstance(manual_request, dict):
+        return True, "manual_network"
+    return False, None
 
 
 def _cleanup_pending_tool_calls() -> None:
@@ -308,18 +562,21 @@ def _build_chatbot_state_tools(
 
     def set_pref_tool(chain: str) -> str:
         choice = _normalise_chain_choice(chain)
-        if choice != "ARC":
-            return tool_error(
-                "Polygon delivery is temporarily disabled; loans can only be disbursed on ARC."
-            )
-        st.session_state[CHAIN_PREF_SESSION_KEY] = "ARC"
-        return tool_success({"chain_preference": "ARC"})
+        if choice not in {"ARC", "POLYGON"}:
+            return tool_error("Chain preference must be either ARC or POLYGON.")
+        st.session_state[CHAIN_PREF_SESSION_KEY] = choice
+        message = (
+            "Preference set to POLYGON. Loans are recorded on ARC first, then bridged when you request it."
+            if choice == "POLYGON"
+            else "Preference set to ARC for direct disbursement."
+        )
+        return tool_success({"chain_preference": choice, "message": message})
 
     def list_chains_tool() -> str:
         return tool_success(
             {
-                "availableChains": ["ARC"],
-                "message": "Polygon delivery via CCTP is paused until the loan ledger is updated.",
+                "availableChains": ["ARC", "POLYGON"],
+                "message": "Loans originate on ARC. Choosing POLYGON means we'll plan a borrower-side CCTP bridge after ARC disbursement.",
             }
         )
 
@@ -466,7 +723,7 @@ def _build_chatbot_state_tools(
         })
 
     def switch_network_tool(target_network: Optional[str] = None) -> str:
-        """Request network switch automatically via MetaMask."""
+        """Request a manual network switch from the user."""
         # Determine target chain based on parameter or default to ARC
         if target_network and target_network.upper() == "POLYGON":
             target_chain_id = 80002  # Polygon Amoy testnet
@@ -479,29 +736,65 @@ def _build_chatbot_state_tools(
         if target_chain_id is None:
             return tool_error("Target chain id is not configured.")
         
-        # Reset poll counter for new switch attempt
-        st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+        cached = _cached_wallet_state()
+        current_chain = _normalise_chain_id((cached or {}).get("chainId"))
+        if current_chain == target_chain_id:
+            st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
+            return tool_success(
+                {
+                    "manualSwitchRequired": False,
+                    "message": f"Wallet already on {network_name}.",
+                    "wallet": cached,
+                }
+            )
         
-        # Set pending command to trigger automatic network switch
-        sequence = int(time.time() * 1000)
-        st.session_state[CHATBOT_PENDING_COMMAND_KEY] = {
-            "sequence": sequence,
-            "command": "switch_network",
+        st.session_state[CHATBOT_MANUAL_NETWORK_REQUEST_KEY] = {
             "targetChainId": target_chain_id,
+            "targetNetwork": network_name,
+            "requested_at": int(time.time()),
         }
-        # Trigger rerun so wallet widget picks up the command
-        st.session_state["chatbot_needs_tx_rerun"] = True
-        st.session_state["chatbot_waiting_for_wallet"] = True
-        
-        # Return with pending flag - polling is now handled in get_wallet_tool
-        return tool_success({
-            "pending": True,
-            "message": (
-                f"Switching to {network_name} network. Please check MetaMask and approve the switch."
-            ),
-            "targetChainId": target_chain_id,
-            "targetNetwork": network_name
-        })
+        return tool_success(
+            {
+                "manualSwitchRequired": True,
+                "message": (
+                    f"Ask the user to switch MetaMask to {network_name} (chainId {target_chain_id}). "
+                    "Wait for their confirmation, then call `confirmNetworkSwitch`."
+                ),
+                "targetChainId": target_chain_id,
+                "targetNetwork": network_name,
+            }
+        )
+
+    def confirm_network_switch_tool() -> str:
+        """Verify that the wallet has been switched to the requested network."""
+        pending = st.session_state.get(CHATBOT_MANUAL_NETWORK_REQUEST_KEY)
+        if not isinstance(pending, dict):
+            return tool_error("No manual network switch is pending.")
+        target_chain_id = pending.get("targetChainId")
+        network_name = pending.get("targetNetwork") or "ARC"
+        if target_chain_id is None:
+            st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
+            return tool_error("Manual network switch request was missing a target. Please retry `ensureWalletNetwork`.")
+        wallet_state = _cached_wallet_state()
+        current_chain = _normalise_chain_id((wallet_state or {}).get("chainId"))
+        if current_chain == target_chain_id:
+            st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
+            return tool_success(
+                {
+                    "networkConfirmed": True,
+                    "network": network_name,
+                    "chainId": current_chain,
+                    "wallet": wallet_state,
+                }
+            )
+        if current_chain is None:
+            return tool_error(
+                f"Wallet chain is unknown. Call `getConnectedWallet`, ask the user to switch to {network_name}, then retry `confirmNetworkSwitch`."
+            )
+        return tool_error(
+            f"Wallet is still on chain {current_chain} but needs {target_chain_id} ({network_name}). "
+            "Ask the user to switch networks, call `getConnectedWallet`, and try `confirmNetworkSwitch` again."
+        )
 
     def get_roles_tool() -> str:
         return tool_success({"role_addresses": dict(_current_roles())})
@@ -541,11 +834,192 @@ def _build_chatbot_state_tools(
             st.session_state["chatbot_roles_dirty"] = True
         return tool_success({"role": normalized_role, "cleared": True})
 
+    def run_user_verification_tool(
+        wallet_address: str,
+        full_name: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        social_link: Optional[str] = None,
+    ) -> str:
+        if not wallet_address:
+            return tool_error("Wallet address is required.")
+        try:
+            checksum_wallet = Web3.to_checksum_address(wallet_address)
+        except ValueError:
+            return tool_error("Wallet address is invalid.")
+
+        def _clean(value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            stripped = value.strip()
+            return stripped or None
+
+        user_data = {
+            "wallet_address": checksum_wallet,
+            "full_name": _clean(full_name),
+            "email": _clean(email),
+            "phone": _clean(phone),
+            "social_link": _clean(social_link),
+        }
+
+        required_labels = {
+            "full_name": "Full Name",
+            "email": "Email",
+            "phone": "Phone",
+            "social_link": "Social Link",
+        }
+        missing_fields = [
+            label
+            for key, label in required_labels.items()
+            if not user_data.get(key)
+        ]
+        if missing_fields:
+            return tool_error(
+                "User verification requires these fields: "
+                + ", ".join(missing_fields)
+                + ". Ask the user for this information before running the tool again."
+            )
+
+        payloads = st.session_state.get("verification_uploaded_file_payloads") or []
+        if not isinstance(payloads, list):
+            payloads = []
+
+        import logging
+
+        logger = logging.getLogger("arc.mcp.tools")
+        names_preview: list[str] = []
+        for payload in payloads:
+            if isinstance(payload, dict):
+                names_preview.append(str(payload.get("name", "document")))
+            else:
+                names_preview.append(str(getattr(payload, "name", payload)))
+        logger.info(
+            "runUserVerification: found %d uploaded payloads: %s",
+            len(payloads),
+            names_preview,
+        )
+
+        if not payloads:
+            return tool_error(
+                "User verification needs at least one uploaded document. Use the User Verification upload form and try again."
+            )
+
+        documents: list[_VerificationMemoryFile] = []
+        for payload in payloads:
+            name = str(payload.get("name") or "document")
+            data = payload.get("data") or b""
+            mime_type = str(payload.get("type") or "application/octet-stream")
+            documents.append(_VerificationMemoryFile(name, mime_type, data))
+
+        if not documents:
+            return tool_error(
+                "User verification needs at least one uploaded document. Use the User Verification upload form and try again."
+            )
+
+        user_data["uploaded_files"] = documents
+
+        try:
+            results = asyncio.run(run_verification_flow(user_data))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                results = loop.run_until_complete(run_verification_flow(user_data))
+            finally:
+                loop.close()
+        except Exception as exc:
+            return tool_error(f"Verification failed: {exc}")
+
+        score_calc = results.get("score_calculation") or {}
+        final_score = 600  # Hard-coded score per requirements
+        score_calc["final_score"] = final_score
+        results["score_calculation"] = score_calc
+
+        entry = {
+            "wallet": checksum_wallet,
+            "timestamp": time.time(),
+            "final_score": final_score,
+            "user_data": {
+                "wallet_address": checksum_wallet,
+                "full_name": user_data["full_name"],
+                "email": user_data["email"],
+                "phone": user_data["phone"],
+                "social_link": user_data["social_link"],
+                "documents": len(documents),
+            },
+            "documents": [doc.name for doc in documents],
+            "results": results,
+        }
+        _cache_verification_result(checksum_wallet, entry)
+
+        summary = {
+            "wallet": checksum_wallet,
+            "final_score": final_score,
+            "on_chain_score": score_calc.get("on_chain_score"),
+            "off_chain_score": score_calc.get("off_chain_score"),
+            "eligible": bool(
+                (results.get("eligibility_check") or {}).get("eligible", False)
+            ),
+        }
+        return tool_success({"summary": summary, "verification": results})
+
+    def get_verification_status_tool(wallet_address: str) -> str:
+        if not wallet_address:
+            return tool_error("Wallet address is required.")
+        try:
+            checksum_wallet = Web3.to_checksum_address(wallet_address)
+        except ValueError:
+            return tool_error("Wallet address is invalid.")
+        entry = _get_verification_result(checksum_wallet)
+        if not entry:
+            return tool_error(
+                "No recent verification found for this wallet. Run `runUserVerification` first (results expire after 15 minutes)."
+            )
+        return tool_success(entry)
+
     register(
         "getLoanChainPreference",
         "Return the current loan settlement chain preference.",
         {"type": "object", "properties": {}, "required": []},
         lambda: get_pref_tool(),
+    )
+
+    register(
+        "runUserVerification",
+        "Run the borrower verification workflow and cache the resulting trust score.",
+        {
+            "type": "object",
+            "properties": {
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Borrower wallet address to verify.",
+                },
+                "full_name": {"type": "string", "description": "Borrower full name."},
+                "email": {"type": "string", "description": "Borrower email address."},
+                "phone": {"type": "string", "description": "Borrower phone number."},
+                "social_link": {
+                    "type": "string",
+                    "description": "Borrower social profile (LinkedIn, GitHub, etc.).",
+                },
+            },
+            "required": ["wallet_address", "full_name", "email", "phone", "social_link"],
+        },
+        run_user_verification_tool,
+    )
+
+    register(
+        "getVerificationStatus",
+        "Return the most recent verification summary cached for a wallet.",
+        {
+            "type": "object",
+            "properties": {
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Wallet address to look up.",
+                }
+            },
+            "required": ["wallet_address"],
+        },
+        get_verification_status_tool,
     )
 
     register(
@@ -582,7 +1056,7 @@ def _build_chatbot_state_tools(
 
     register(
         "ensureWalletNetwork",
-        "Request MetaMask to switch to ARC or Polygon network. Defaults to ARC if not specified.",
+        "Request the user to manually switch to ARC or Polygon. Defaults to ARC if not specified.",
         {
             "type": "object",
             "properties": {
@@ -595,6 +1069,13 @@ def _build_chatbot_state_tools(
             "required": []
         },
         switch_network_tool,
+    )
+
+    register(
+        "confirmNetworkSwitch",
+        "Confirm that the wallet was switched to the network requested via `ensureWalletNetwork`.",
+        {"type": "object", "properties": {}, "required": []},
+        confirm_network_switch_tool,
     )
 
     register(
@@ -646,6 +1127,33 @@ def render_chatbot_page() -> None:
     st.caption(
         "Powered by OpenAI GPT-5 and MCP tools. Connect your wallet below, then chat with Doggo for agentic assistance."
     )
+    manual_request_state: Optional[Dict[str, Any]] = None
+    manual_request = st.session_state.get(CHATBOT_MANUAL_NETWORK_REQUEST_KEY)
+    if isinstance(manual_request, dict):
+        target_chain = manual_request.get("targetChainId")
+        network_name = manual_request.get("targetNetwork") or (
+            "Polygon" if target_chain == 80002 else "ARC"
+        )
+        wallet_snapshot = st.session_state.get(DEFAULT_SESSION_KEY)
+        current_chain = None
+        if isinstance(wallet_snapshot, dict):
+            current_chain = _normalise_chain_id(wallet_snapshot.get("chainId"))
+        chain_ready = current_chain == target_chain and target_chain is not None
+        manual_request_state = {
+            "target_chain": target_chain,
+            "network_name": network_name,
+            "chain_ready": chain_ready,
+        }
+        if chain_ready:
+            st.success(
+                f"✅ MetaMask already reports {network_name}. Let Doggo know in chat once you're ready so it can verify."
+            )
+        else:
+            chain_label = f"(chainId {target_chain})" if target_chain else ""
+            st.warning(
+                f"⏸️ Doggo is waiting for you to switch MetaMask to {network_name} {chain_label}. "
+                "Switch networks, then confirm in chat so the agent can continue."
+            )
     
     # Always-visible wallet widget for agentic MetaMask interactions
     # Default to Arc chain ID
@@ -664,20 +1172,9 @@ def render_chatbot_page() -> None:
     if pending_action and isinstance(pending_action, dict):
         action_type = pending_action.get("command")
         if action_type == "switch_network":
-            # Handle network switch command
-            target_chain = pending_action.get("targetChainId")
-            st.info("🔄 Please check MetaMask and approve the network switch.")
-            sequence = pending_action.get("sequence")
-            if sequence is None:
-                sequence = int(time.time() * 1000)
-                pending_action["sequence"] = sequence
-                st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
-            
-            # Mark that we need to trigger network switch through the main wallet component
-            if not pending_action.get("headless_triggered"):
-                pending_action["headless_triggered"] = True
-                pending_action["needs_wallet_command"] = True
-                st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
+            st.info("Clearing legacy automatic network switch request. Use the manual switch workflow instead.")
+            st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+            pending_action = None
             
         elif action_type == "send_transaction":
             tx_req = pending_action.get("tx_request")
@@ -1251,6 +1748,30 @@ def render_chatbot_page() -> None:
         accept_multiple_files=True,
         key="chatbot_attachments",
     )
+    attachment_payloads: list[Dict[str, Any]] = []
+    if attachments:
+        for file in attachments:
+            try:
+                data = file.read()
+            except Exception:
+                data = b""
+            size = len(data)
+            try:
+                file.seek(0)
+            except Exception:
+                pass
+            filename = getattr(file, "name", "document")
+            mime = getattr(file, "type", None) or mimetypes.guess_type(filename)[0]
+            attachment_payloads.append(
+                {
+                    "name": filename,
+                    "type": mime or "application/octet-stream",
+                    "size": size,
+                    "data": data,
+                }
+            )
+    st.session_state["chatbot_attachment_payloads"] = attachment_payloads
+    _update_combined_upload_payloads()
     include_attachments = st.checkbox(
         "Include attachments in next message",
         value=True,
@@ -1273,7 +1794,7 @@ def render_chatbot_page() -> None:
         "Ask Doggo anything about setup, credit scoring, or MCP tooling…",
         key="chatbot_prompt",
     )
-    wallet_blocked = _wallet_flow_blocked()
+    wallet_blocked, wallet_block_reason = _wallet_flow_blocked()
     prompt_blocked = False
 
     if prompt:
@@ -1291,14 +1812,23 @@ def render_chatbot_page() -> None:
                 with st.expander("Attachments included in this turn"):
                     for f in attachments:
                         st.write(f"- {getattr(f, 'name', 'document')}")
-        if wallet_blocked:
+        if wallet_blocked and wallet_block_reason != "manual_network":
             prompt_blocked = True
 
     if prompt_blocked:
         with st.chat_message("assistant"):
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.info("I'm still waiting for the previous wallet transaction to finish. Approve it in MetaMask or wait for confirmation.")
+                if wallet_block_reason == "manual_network":
+                    target_network = (manual_request_state or {}).get("network_name") or "the requested"
+                    target_chain = (manual_request_state or {}).get("target_chain")
+                    chain_label = f" (chainId {target_chain})" if target_chain else ""
+                    st.warning(
+                        f"I'm paused until you switch MetaMask to {target_network}{chain_label} and let me know it's done. "
+                        "Reply once you've switched so I can verify."
+                    )
+                else:
+                    st.info("I'm still waiting for the previous wallet transaction to finish. Approve it in MetaMask or wait for confirmation.")
             with col2:
                 if st.button("🔄 Clear & Retry", key="clear_wallet_block"):
                     # Clear all wallet-related blocking states
@@ -1306,6 +1836,7 @@ def render_chatbot_page() -> None:
                     st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
                     st.session_state.pop("chatbot_waiting_for_wallet", None)
                     st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+                    st.session_state.pop(CHATBOT_MANUAL_NETWORK_REQUEST_KEY, None)
                     st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
                     st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
                     import logging
@@ -1424,6 +1955,8 @@ def render_chatbot_page() -> None:
             sbt_guard = build_sbt_guard(w3, sbt_contract)
         except Exception:
             pass
+    if sbt_function_map.get("issueScore"):
+        sbt_function_map["issueScore"] = _guard_issue_score(sbt_function_map["issueScore"])
     pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
     pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
     usdc_address = os.getenv(USDC_ADDRESS_ENV)
@@ -1564,7 +2097,8 @@ cd blockchain_code && forge build""", language="bash")
     resume_mode = bool(resume_pending and not prompt)
 
     _cleanup_pending_tool_calls()
-    if _wallet_flow_blocked():
+    blocked, block_reason = _wallet_flow_blocked()
+    if blocked and block_reason != "manual_network":
         return
 
     if not prompt and not resume_mode:
@@ -1594,18 +2128,19 @@ cd blockchain_code && forge build""", language="bash")
             pending_action,
             st.session_state.get(CHATBOT_PENDING_TX_KEY),
         )
-        gif_display.show(initial_hint)
+        gif_display.set_context(initial_hint)
+        gif_display.begin_conversation()
 
         if waves:
             from streamlit_lottie import st_lottie_spinner
 
             with st_lottie_spinner(waves, key="waves_spinner"):
-                _run_conversation_with_status(gif_display.show)
+                _run_conversation_with_status(gif_display.handle_status_event)
         else:
             with st.spinner(spinner_text):
-                _run_conversation_with_status(gif_display.show)
+                _run_conversation_with_status(gif_display.handle_status_event)
 
-        gif_display.show(None)
+        gif_display.end_conversation()
     
     # If a transaction was prepared during the conversation, rerun to show it
     if st.session_state.get("chatbot_needs_tx_rerun"):

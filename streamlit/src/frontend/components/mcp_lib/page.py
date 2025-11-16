@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import mimetypes
 import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional
@@ -934,6 +935,10 @@ def _render_verification_section() -> None:
     st.divider()
     st.subheader("🔍 User Verification")
     st.caption("Enter user information to run through the complete verification flow.")
+    st.info(
+        "Provide Full Name, Email, Phone, Social Link, and upload supporting documents here. "
+        "The chatbot uses this data when it runs `runUserVerification` before issuing TrustMint scores."
+    )
 
     # Session state key for storing verification results
     verification_results_key = "verification_results"
@@ -1009,15 +1014,54 @@ def _render_verification_section() -> None:
 
         uploaded_files = st.file_uploader(
             "Upload Files",
-            type=["pdf", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
-            help="Optional: Upload documents (PDF, PNG, JPEG) - files must be > 20 KB",
+            help="Optional: Upload supporting documents (any format).",
             key="verification_uploaded_files",
         )
 
         submitted = st.form_submit_button(
             "Run Verification", type="primary", disabled=not wallet_address
         )
+
+    processed_uploads: list[dict[str, Any]] = []
+    if uploaded_files:
+        for file in uploaded_files:
+            try:
+                data = file.read()
+            except Exception:
+                data = b""
+            size = len(data)
+            try:
+                file.seek(0)
+            except Exception:
+                pass
+            filename = getattr(file, "name", "document")
+            mime = getattr(file, "type", None) or mimetypes.guess_type(filename)[0]
+            processed_uploads.append(
+                {
+                    "name": filename,
+                    "type": mime or "application/octet-stream",
+                    "size": size,
+                    "data": data,
+                }
+            )
+        st.session_state["verification_uploaded_file_payloads"] = processed_uploads
+    else:
+        st.session_state.setdefault("verification_uploaded_file_payloads", [])
+
+    if processed_uploads:
+        st.caption("Files ready for verification (form uploads):")
+        for payload in processed_uploads:
+            kb = payload["size"] / 1024 if payload["size"] else 0
+            st.write(f"- {payload['name']} ({kb:.1f} KB)")
+
+    st.session_state["verification_form_upload_payloads"] = processed_uploads
+    chat_payloads = st.session_state.get("chatbot_attachment_payloads")
+    combined: list[Dict[str, Any]] = []
+    combined.extend(processed_uploads)
+    if isinstance(chat_payloads, list):
+        combined.extend(chat_payloads)
+    st.session_state["verification_uploaded_file_payloads"] = combined
 
     # Handle form submission
     if submitted:
